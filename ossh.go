@@ -64,17 +64,11 @@ func (d dialer) Dial(network, address string) (Conn, error) {
 }
 
 func (d dialer) DialContext(ctx context.Context, network, address string) (Conn, error) {
-	switch network {
-	case "tcp", "tcp4", "tcp6":
-	default:
-		// TODO: verify this is required
-		return nil, fmt.Errorf("network must be one of tcp, tcp4, or tcp6; got %v", network)
-	}
-	tcpConn, err := d.NetDialer.DialContext(ctx, network, address)
+	transport, err := d.NetDialer.DialContext(ctx, network, address)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial TCP: %w", err)
 	}
-	return Client(tcpConn, d.DialerConfig), nil
+	return Client(transport, d.DialerConfig), nil
 }
 
 func WrapDialer(d NetDialer, cfg DialerConfig) Dialer {
@@ -95,18 +89,11 @@ type listener struct {
 }
 
 func (l listener) Accept() (Conn, error) {
-	tcpConn, err := l.Listener.Accept()
+	transport, err := l.Listener.Accept()
 	if err != nil {
 		return nil, err
 	}
-	switch tcpConn.LocalAddr().Network() {
-	case "tcp", "tcp4", "tcp6":
-	default:
-		// TODO: verify this is required
-		return nil, fmt.Errorf(
-			"network must be one of tcp, tcp4, or tcp6; got %v", tcpConn.LocalAddr().Network())
-	}
-	return Server(tcpConn, l.ListenerConfig), nil
+	return Server(transport, l.ListenerConfig), nil
 }
 
 func WrapListener(l net.Listener, cfg ListenerConfig) Listener {
