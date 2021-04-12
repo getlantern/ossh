@@ -2,7 +2,6 @@ package ossh
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -69,7 +68,7 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (Conn,
 	case "tcp", "tcp4", "tcp6":
 	default:
 		// TODO: verify this is required
-		return nil, errors.New("network must be one of tcp, tcp4, or tcp6")
+		return nil, fmt.Errorf("network must be one of tcp, tcp4, or tcp6; got %v", network)
 	}
 	tcpConn, err := d.NetDialer.DialContext(ctx, network, address)
 	if err != nil {
@@ -102,8 +101,10 @@ func (l listener) Accept() (Conn, error) {
 	}
 	switch tcpConn.LocalAddr().Network() {
 	case "tcp", "tcp4", "tcp6":
+	default:
 		// TODO: verify this is required
-		return nil, errors.New("network must be one of tcp, tcp4, or tcp6")
+		return nil, fmt.Errorf(
+			"network must be one of tcp, tcp4, or tcp6; got %v", tcpConn.LocalAddr().Network())
 	}
 	return Server(tcpConn, l.ListenerConfig), nil
 }

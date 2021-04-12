@@ -174,7 +174,7 @@ func osshPipe(t *testing.T) (client, server io.ReadWriteCloser) {
 	return client, server
 }
 
-func TestClientServer(t *testing.T) {
+func TestPrototype(t *testing.T) {
 	client, server := osshPipe(t)
 
 	type result struct {
