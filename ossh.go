@@ -1,30 +1,82 @@
 package ossh
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
 	"net"
-	"time"
 
+	"github.com/Psiphon-Labs/psiphon-tunnel-core/psiphon/common"
 	"golang.org/x/crypto/ssh"
 )
 
-type DialerConfig struct {
-	ssh.ClientConfig
+const (
+	// TODO: determine reasonable defaults
+	DefaultMinPadding = -1
+	DefaultMaxPadding = -1
+)
 
-	ObfuscationKeyword     string
-	PaddingPRNGSeed        [32]byte
+// DialerConfig specifies configuration for dialing.
+type DialerConfig struct {
+	// ServerPublicKey must be set.
+	ServerPublicKey ssh.PublicKey
+
+	// ObfuscationKeyword is used during the obfuscation handshake and must be agreed upon by the
+	// client and the server. Must be set.
+	ObfuscationKeyword string
+
+	// PaddingPRNGSeed provides the seed for the PRNG generating padding. If not set, a seed value
+	// will be derived using crypto/rand.Reader. It is recommended that this value be set as a
+	// panic will occur if crypto/rand.Reader fails.
+	PaddingPRNGSeed [32]byte
+
+	// MinPadding and MaxPadding default to DefaultMinPadding and DefaultMaxPadding.
 	MinPadding, MaxPadding int
 }
 
-type ListenerConfig struct {
-	ssh.ServerConfig
+func (cfg DialerConfig) withDefaults() DialerConfig {
+	newCfg := cfg
 
+	// TODO: just hardcode all of these?
+
+	zeros := [32]byte{}
+	if bytes.Equal(cfg.PaddingPRNGSeed[:], zeros[:]) {
+		_, err := rand.Reader.Read(newCfg.PaddingPRNGSeed[:])
+		if err != nil {
+			panic(fmt.Sprintf("failed to read PaddingPRNGSeed from crypto/rand.Reader: %v", err))
+		}
+	}
+	if cfg.MinPadding <= 0 {
+		newCfg.MinPadding = DefaultMinPadding
+	}
+	if cfg.MaxPadding <= 0 {
+		newCfg.MaxPadding = DefaultMaxPadding
+	}
+	return newCfg
+}
+
+type ListenerConfig struct {
+	// HostKey is provided to SSH clients trying to connect. Must be set.
+	HostKey ssh.Signer
+
+	// ObfuscationKeyword is used during the obfuscation handshake and must be agreed upon by the
+	// client and the server. Must be set.
 	ObfuscationKeyword string
-	SeedTTL            time.Duration
-	Logger             func(clientIP string, err error, fields map[string]interface{})
+
+	Logger func(clientIP string, err error, fields map[string]interface{})
+}
+
+func (cfg ListenerConfig) logger() func(string, error, common.LogFields) {
+	_logger := cfg.Logger
+	return func(clientIP string, err error, fields common.LogFields) {
+		if _logger == nil {
+			return
+		}
+		_logger(clientIP, err, map[string]interface{}(fields))
+	}
 }
 
 // Dialer is the interface implemented by ossh dialers. Note that the methods return an ossh Conn,
@@ -100,19 +152,14 @@ func WrapListener(l net.Listener, cfg ListenerConfig) Listener {
 type Conn interface {
 	io.ReadWriteCloser
 
-	// RemoteAddr returns the remote address for this connection.
-	RemoteAddr() net.Addr
-
-	// LocalAddr returns the local address for this connection.
-	LocalAddr() net.Addr
+	// Handshake executes an ossh handshake with the peer.
+	Handshake() error
 }
 
-func Client(tcpConn Conn, cfg DialerConfig) Conn {
-	// TODO: implement me!
-	return nil
+func Client(tcpConn net.Conn, cfg DialerConfig) Conn {
+	return &conn{handshake: clientHandshake(tcpConn, cfg)}
 }
 
-func Server(tcpConn Conn, cfg ListenerConfig) Conn {
-	// TODO: implement me!
-	return nil
+func Server(tcpConn net.Conn, cfg ListenerConfig) Conn {
+	return &conn{handshake: serverHandshake(tcpConn, cfg)}
 }
