@@ -1,3 +1,5 @@
+// Package ossh provides facilities for creating network connections using obfuscated SSH.
+// See https://github.com/brl/obfuscated-openssh/blob/master/README.obfuscation
 package ossh
 
 import (
@@ -20,6 +22,7 @@ type DialerConfig struct {
 	ObfuscationKeyword string
 }
 
+// ListenerConfig specifies configuration for listening.
 type ListenerConfig struct {
 	// HostKey is provided to SSH clients trying to connect. Must be set.
 	HostKey ssh.Signer
@@ -71,6 +74,7 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (Conn,
 	return Client(transport, d.DialerConfig), nil
 }
 
+// WrapDialer wraps a network dialer, returning an ossh dialer.
 func WrapDialer(d NetDialer, cfg DialerConfig) Dialer {
 	return dialer{d, cfg}
 }
@@ -96,21 +100,26 @@ func (l listener) Accept() (Conn, error) {
 	return Server(transport, l.ListenerConfig), nil
 }
 
+// WrapListener wraps a network listener, returning an ossh listener.
 func WrapListener(l net.Listener, cfg ListenerConfig) Listener {
 	return listener{l, cfg}
 }
 
+// Conn is a network connection between two peers over ossh.
 type Conn interface {
 	io.ReadWriteCloser
 
-	// Handshake executes an ossh handshake with the peer.
+	// Handshake executes an ossh handshake with the peer. Most users of this package need not call
+	// this function directly; the first Read or Write will trigger a handshake if needed.
 	Handshake() error
 }
 
-func Client(tcpConn net.Conn, cfg DialerConfig) Conn {
-	return &conn{handshake: clientHandshake(tcpConn, cfg)}
+// Client initializes a client-side connection.
+func Client(transport net.Conn, cfg DialerConfig) Conn {
+	return &conn{handshake: clientHandshake(transport, cfg)}
 }
 
-func Server(tcpConn net.Conn, cfg ListenerConfig) Conn {
-	return &conn{handshake: serverHandshake(tcpConn, cfg)}
+// Server initializes a server-side connection.
+func Server(transport net.Conn, cfg ListenerConfig) Conn {
+	return &conn{handshake: serverHandshake(transport, cfg)}
 }
