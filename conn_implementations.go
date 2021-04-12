@@ -13,7 +13,6 @@ import (
 
 func clientHandshake(transport net.Conn, cfg DialerConfig) func() (ssh.Conn, ssh.Channel, error) {
 	return func() (ssh.Conn, ssh.Channel, error) {
-		cfg = cfg.withDefaults()
 		if cfg.ServerPublicKey == nil {
 			return nil, nil, errors.New("server public key must be configured")
 		}
@@ -21,11 +20,17 @@ func clientHandshake(transport net.Conn, cfg DialerConfig) func() (ssh.Conn, ssh
 			return nil, nil, errors.New("obfuscation keywork must be configured")
 		}
 
+		prngSeed, err := prng.NewSeed()
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to generate PRNG seed: %w", err)
+		}
+
 		osshConn, err := obfuscator.NewClientObfuscatedSSHConn(
 			transport,
 			cfg.ObfuscationKeyword,
-			(*prng.Seed)(&cfg.PaddingPRNGSeed),
-			&cfg.MinPadding, &cfg.MaxPadding,
+			prngSeed,
+			// Set min/max padding to nil to use obfuscator package defaults.
+			nil, nil,
 		)
 		if err != nil {
 			return nil, nil, fmt.Errorf("ossh handshake failed: %w", err)
@@ -106,7 +111,7 @@ type conn struct {
 
 func (conn *conn) Handshake() error {
 	conn.shakeOnce.Do(func() {
-		conn.conn, conn.channel, conn.shakeErr = conn.handshake(conn.transport)
+		conn.conn, conn.channel, conn.shakeErr = conn.handshake()
 	})
 	return conn.shakeErr
 }

@@ -1,9 +1,7 @@
 package ossh
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -11,12 +9,6 @@ import (
 
 	"github.com/Psiphon-Labs/psiphon-tunnel-core/psiphon/common"
 	"golang.org/x/crypto/ssh"
-)
-
-const (
-	// TODO: determine reasonable defaults
-	DefaultMinPadding = -1
-	DefaultMaxPadding = -1
 )
 
 // DialerConfig specifies configuration for dialing.
@@ -27,35 +19,6 @@ type DialerConfig struct {
 	// ObfuscationKeyword is used during the obfuscation handshake and must be agreed upon by the
 	// client and the server. Must be set.
 	ObfuscationKeyword string
-
-	// PaddingPRNGSeed provides the seed for the PRNG generating padding. If not set, a seed value
-	// will be derived using crypto/rand.Reader. It is recommended that this value be set as a
-	// panic will occur if crypto/rand.Reader fails.
-	PaddingPRNGSeed [32]byte
-
-	// MinPadding and MaxPadding default to DefaultMinPadding and DefaultMaxPadding.
-	MinPadding, MaxPadding int
-}
-
-func (cfg DialerConfig) withDefaults() DialerConfig {
-	newCfg := cfg
-
-	// TODO: just hardcode all of these?
-
-	zeros := [32]byte{}
-	if bytes.Equal(cfg.PaddingPRNGSeed[:], zeros[:]) {
-		_, err := rand.Reader.Read(newCfg.PaddingPRNGSeed[:])
-		if err != nil {
-			panic(fmt.Sprintf("failed to read PaddingPRNGSeed from crypto/rand.Reader: %v", err))
-		}
-	}
-	if cfg.MinPadding <= 0 {
-		newCfg.MinPadding = DefaultMinPadding
-	}
-	if cfg.MaxPadding <= 0 {
-		newCfg.MaxPadding = DefaultMaxPadding
-	}
-	return newCfg
 }
 
 type ListenerConfig struct {
