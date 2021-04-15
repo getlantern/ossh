@@ -5,7 +5,6 @@ package ossh
 import (
 	"context"
 	"fmt"
-	"io"
 	"net"
 
 	"github.com/Psiphon-Labs/psiphon-tunnel-core/psiphon/common"
@@ -107,12 +106,14 @@ func WrapListener(l net.Listener, cfg ListenerConfig) Listener {
 
 // Conn is a network connection between two peers over ossh.
 type Conn interface {
-	io.ReadWriteCloser
+	net.Conn
 
 	// Handshake executes an ossh handshake with the peer. Most users of this package need not call
 	// this function directly; the first Read or Write will trigger a handshake if needed.
 	Handshake() error
 }
+
+// TODO: initialize conn properly below
 
 // Client initializes a client-side connection.
 func Client(transport net.Conn, cfg DialerConfig) Conn {

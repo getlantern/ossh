@@ -13,6 +13,8 @@ type ioResult struct {
 	err error
 }
 
+// TODO: experiment with net.pipeDeadline: https://golang.org/src/net/pipe.go
+
 // deadline represents a point in time. Users of a deadline can listen to deadline.maybeExpired for
 // notifications on when the deadline may have expired. Values on deadline.maybeExpired may be
 // stale, so expiration status should always be confirmed with a call to deadline.expired()
@@ -83,6 +85,8 @@ func (d *deadline) flushRoutines() {
 // the underlying ReadWriteCloser is a network transport and unlikely to block for long on Writes.
 //
 // A consequence of using the deadlineReadWriter is that Reads and Writes will be single-threaded.
+//
+// All exported methods are concurrency-safe.
 type deadlineReadWriter struct {
 	io.ReadWriteCloser
 
@@ -122,6 +126,7 @@ func addDeadlineSupport(rwc io.ReadWriteCloser) *deadlineReadWriter {
 	}
 }
 
+// Read implements net.Conn.Read.
 func (drw *deadlineReadWriter) Read(b []byte) (n int, err error) {
 	drw.readLock.Lock()
 	defer drw.readLock.Unlock()
@@ -184,6 +189,8 @@ func (drw *deadlineReadWriter) Read(b []byte) (n int, err error) {
 	}
 }
 
+// Write implements net.Conn.Write.
+//
 // Unlike Read, Write may return 0, os.ErrDeadlineExceeded, but still successfully occur later. In
 // this way, writes are more like fire-and-forget calls. In practice, this is unlikely to be an
 // issue as the underlying transport is unlikely to block for long on a write.
@@ -226,6 +233,7 @@ func (drw *deadlineReadWriter) Write(b []byte) (n int, err error) {
 	}
 }
 
+// Close implements net.Conn.Close. It is safe to call Close multiple times.
 func (drw *deadlineReadWriter) Close() error {
 	drw.closeOnce.Do(func() {
 		close(drw.closed)
@@ -234,19 +242,19 @@ func (drw *deadlineReadWriter) Close() error {
 	return drw.closeErr
 }
 
-// Behaves as specified by net.Conn.SetReadDeadline.
+// SetReadDeadline implements net.Conn.SetReadDeadline.
 func (drw *deadlineReadWriter) SetReadDeadline(t time.Time) error {
 	drw.readDeadline.set(t)
 	return nil
 }
 
-// Behaves as specified by net.Conn.SetWriteDeadline.
+// SetWriteDeadline implements net.Conn.SetWriteDeadline.
 func (drw *deadlineReadWriter) SetWriteDeadline(t time.Time) error {
 	drw.writeDeadline.set(t)
 	return nil
 }
 
-// Behaves as specified by net.Conn.SetDeadline.
+// SetDeadline implements net.Conn.SetDeadline.
 func (drw *deadlineReadWriter) SetDeadline(t time.Time) error {
 	drw.readDeadline.set(t)
 	drw.writeDeadline.set(t)
