@@ -12,9 +12,8 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// makePipe almost implements nettest.MakePipe. It currently does not quite as Conn does not quite
-// meet net.Conn.
-func makePipe() (c1, c2 Conn, stop func(), err error) {
+// makePipe implements nettest.MakePipe.
+func makePipe() (c1, c2 net.Conn, stop func(), err error) {
 	const keyword = "obfuscation-keyword"
 
 	_hostKey, err := rsa.GenerateKey(rand.Reader, 1024)
@@ -34,6 +33,10 @@ func makePipe() (c1, c2 Conn, stop func(), err error) {
 		ServerPublicKey:    hostKey.PublicKey(),
 		ObfuscationKeyword: keyword,
 	}
+
+	// It would be simpler to use net.Pipe to set up the peer connections (maybe with some internal
+	// buffering as in tlsmasq/internal/testutil.BufferedPipe). However, golang.org/x/crypto/ssh
+	// does not seem to like these piped connections. Instead, we just set up a local listener.
 
 	_l, err := net.Listen("tcp", "")
 	if err != nil {
@@ -89,6 +92,25 @@ func makePipe() (c1, c2 Conn, stop func(), err error) {
 	return client, server, func() { client.Close(); server.Close() }, nil
 }
 
+func TestAddr(t *testing.T) {
+	c1, c2, stop, err := makePipe()
+	require.NoError(t, err)
+	defer stop()
+
+	fmt.Println("c1.Local:", c1.LocalAddr())
+	fmt.Println("c1.Remote:", c1.RemoteAddr())
+	fmt.Println("c2.Local:", c2.LocalAddr())
+	fmt.Println("c2.Remote:", c2.RemoteAddr())
+
+	go c1.(Conn).Handshake()
+	c2.(Conn).Handshake()
+
+	fmt.Println("c1.Local:", c1.LocalAddr())
+	fmt.Println("c1.Remote:", c1.RemoteAddr())
+	fmt.Println("c2.Local:", c2.LocalAddr())
+	fmt.Println("c2.Remote:", c2.RemoteAddr())
+}
+
 func TestListenAndDial(t *testing.T) {
 	t.Parallel()
 
@@ -110,7 +132,7 @@ func TestListenAndDial(t *testing.T) {
 	clientResC := make(chan result)
 	go func() {
 		msg, err := func() (string, error) {
-			_, err = client.Write([]byte(clientMsg))
+			_, err := client.Write([]byte(clientMsg))
 			if err != nil {
 				return "", fmt.Errorf("write error: %w", err)
 			}
@@ -126,7 +148,7 @@ func TestListenAndDial(t *testing.T) {
 	}()
 	go func() {
 		msg, err := func() (string, error) {
-			_, err = server.Write([]byte(serverMsg))
+			_, err := server.Write([]byte(serverMsg))
 			if err != nil {
 				return "", fmt.Errorf("write error: %w", err)
 			}

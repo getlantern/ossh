@@ -23,6 +23,8 @@ import (
 // subtle errors.
 // TODO: think about a better way to structure the code in light of the above
 
+// TODO: think about multiplexing via channels rather than layering multiplexing on top
+
 func discardChannels(chans <-chan ssh.NewChannel) {
 	for newChan := range chans {
 		newChan.Reject(ssh.ResourceShortage, "not accepting any more channels")
@@ -207,5 +209,6 @@ func (conn *conn) Close() error {
 	return err
 }
 
+// TODO: These may return nil (because ssh.Conn.*Addr returns nil sometimes). Is that a problem?
 func (conn *conn) LocalAddr() net.Addr  { return conn.localAddr }
 func (conn *conn) RemoteAddr() net.Addr { return conn.remoteAddr }

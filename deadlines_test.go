@@ -1,7 +1,6 @@
 package ossh
 
 import (
-	"io"
 	"net"
 	"testing"
 	"time"
@@ -50,11 +49,6 @@ func makeDeadlineTestPipe() (c1, c2 net.Conn, stop func(), err error) {
 	c1 = &deadlineTestConn{addDeadlineSupport(_c1)}
 	c2 = &deadlineTestConn{addDeadlineSupport(_c2)}
 	return c1, c2, func() { c1.Close(); c2.Close() }, nil
-}
-
-type simpleReadWriter struct {
-	io.Reader
-	io.Writer
 }
 
 // deadlineTestConn implements net.Conn for use in TestDeadlineReadWriter.

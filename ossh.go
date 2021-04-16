@@ -113,8 +113,6 @@ type Conn interface {
 	Handshake() error
 }
 
-// TODO: initialize conn properly below
-
 // Client initializes a client-side connection.
 func Client(transport net.Conn, cfg DialerConfig) Conn {
 	return newConn(clientHandshake(transport, cfg))
