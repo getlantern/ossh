@@ -117,10 +117,10 @@ type Conn interface {
 
 // Client initializes a client-side connection.
 func Client(transport net.Conn, cfg DialerConfig) Conn {
-	return &conn{handshake: clientHandshake(transport, cfg)}
+	return newConn(clientHandshake(transport, cfg))
 }
 
 // Server initializes a server-side connection.
 func Server(transport net.Conn, cfg ListenerConfig) Conn {
-	return &conn{handshake: serverHandshake(transport, cfg)}
+	return newConn(serverHandshake(transport, cfg))
 }

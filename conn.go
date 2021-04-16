@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 
 	"github.com/Psiphon-Labs/psiphon-tunnel-core/psiphon/common/obfuscator"
 	"github.com/Psiphon-Labs/psiphon-tunnel-core/psiphon/common/prng"
@@ -20,6 +21,7 @@ import (
 // single-threaded Reads and Writes anyway. If this changes or if the behavior of deadlineReadWriter
 // changes, we should ensure that we still enforce single-threaded Reads and Writes to prevent
 // subtle errors.
+// TODO: think about a better way to structure the code in light of the above
 
 func discardChannels(chans <-chan ssh.NewChannel) {
 	for newChan := range chans {
@@ -125,22 +127,62 @@ type conn struct {
 	*deadlineReadWriter
 	localAddr, remoteAddr net.Addr
 
-	handshake       func() (*sshReadWriteCloser, error)
-	shakeOnce       *once
-	cancelHandshake chan struct{}
+	handshake func() (*sshReadWriteCloser, error)
+
+	shakeOnce sync.Once
+	shakeErr  error
+
+	closeOnce sync.Once
+	closed    chan struct{}
+	closeErr  chan error
+}
+
+func newConn(handshakeFunc func() (*sshReadWriteCloser, error)) *conn {
+	return &conn{
+		handshake: handshakeFunc,
+		closed:    make(chan struct{}),
+		closeErr:  make(chan error, 1),
+	}
 }
 
 func (conn *conn) Handshake() error {
-	return conn.shakeOnce.do(func() error {
-		var rwc *sshReadWriteCloser
-		rwc, err := conn.handshake()
-		if err != nil {
-			return err
+	// According to net.Conn.Close, conn.Close should immediately cause any blocked Read or Write
+	// operations to unblock and return an error. The underlying deadlineReadWriter guarantees this
+	// behavior, but we need to ensure this still holds during the handshake (and the functions
+	// provided by crypto/ssh and obfuscator do not support cancellation). We additionally want
+	// conn.Close to always return any error returned by the underlying deadlineReadWriter.
+	//
+	// To achieve both goals, the handshake is executed in a separate goroutine, while the calling
+	// routine waits for either handshake completion or closing of the connection. The handshake
+	// goroutine lives on after the handshake. This goroutine becomes responsible for (i) closing
+	// the deadlineReadWriter when conn.Close is called and (ii) communicating the result.
+	// TODO: think about a simpler way to achieve these goals
+
+	conn.shakeOnce.Do(func() {
+		shakeChan := make(chan error, 1)
+		go func() {
+			var rwc *sshReadWriteCloser
+			rwc, err := conn.handshake()
+			if err != nil {
+				shakeChan <- err
+				conn.closeErr <- nil
+				return
+			}
+			conn.deadlineReadWriter = addDeadlineSupport(rwc)
+			conn.localAddr, conn.remoteAddr = rwc.LocalAddr(), rwc.RemoteAddr()
+			shakeChan <- nil
+
+			<-conn.closed
+			conn.closeErr <- conn.deadlineReadWriter.Close()
+		}()
+
+		select {
+		case conn.shakeErr = <-shakeChan:
+		case <-conn.closed:
+			conn.shakeErr = net.ErrClosed
 		}
-		conn.deadlineReadWriter = addDeadlineSupport(rwc)
-		conn.localAddr, conn.remoteAddr = rwc.LocalAddr(), rwc.RemoteAddr()
-		return nil
 	})
+	return conn.shakeErr
 }
 
 func (conn *conn) Read(b []byte) (n int, err error) {
@@ -158,10 +200,11 @@ func (conn *conn) Write(b []byte) (n int, err error) {
 }
 
 func (conn *conn) Close() error {
-	if cancelled := conn.shakeOnce.cancel(net.ErrClosed); !cancelled {
-		return conn.deadlineReadWriter.Close()
-	}
-	return nil
+	conn.closeOnce.Do(func() { close(conn.closed) })
+	err := <-conn.closeErr
+	// Put the error back on the channel for future calls to Close.
+	conn.closeErr <- err
+	return err
 }
 
 func (conn *conn) LocalAddr() net.Addr  { return conn.localAddr }
