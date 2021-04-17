@@ -80,6 +80,17 @@ func (d *deadline) flushRoutines() {
 	}
 }
 
+func (d *deadline) close() {
+	d.Lock()
+	select {
+	case <-d.closed:
+	default:
+		close(d.closed)
+		d.flushRoutines()
+	}
+	d.Unlock()
+}
+
 // deadlineReadWriter is used to add deadline support to an io.ReadWriteCloser. The intended use
 // case is in a net.Conn and some assumptions are made to this effect. One such assumption is that
 // the underlying ReadWriteCloser is a network transport and unlikely to block for long on Writes.
@@ -238,6 +249,8 @@ func (drw *deadlineReadWriter) Close() error {
 	drw.closeOnce.Do(func() {
 		close(drw.closed)
 		drw.closeErr = drw.ReadWriteCloser.Close()
+		drw.readDeadline.close()
+		drw.writeDeadline.close()
 	})
 	return drw.closeErr
 }
