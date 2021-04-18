@@ -46,15 +46,11 @@ func TestDeadlineReadWriter(t *testing.T) {
 // makeDeadlineTestPipe implements nettest.MakePipe.
 func makeDeadlineTestPipe() (c1, c2 net.Conn, stop func(), err error) {
 	_c1, _c2 := net.Pipe()
-	c1 = &deadlineTestConn{addDeadlineSupport(_c1)}
-	c2 = &deadlineTestConn{addDeadlineSupport(_c2)}
+	c1 = addDeadlineSupport(noOpHandshaker{_c1})
+	c2 = addDeadlineSupport(noOpHandshaker{_c2})
 	return c1, c2, func() { c1.Close(); c2.Close() }, nil
 }
 
-// deadlineTestConn implements net.Conn for use in TestDeadlineReadWriter.
-type deadlineTestConn struct {
-	*deadlineReadWriter
-}
+type noOpHandshaker struct{ net.Conn }
 
-func (conn *deadlineTestConn) LocalAddr() net.Addr  { return &net.TCPAddr{} }
-func (conn *deadlineTestConn) RemoteAddr() net.Addr { return &net.TCPAddr{} }
+func (noh noOpHandshaker) Handshake() error { return nil }

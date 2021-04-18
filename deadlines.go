@@ -91,6 +91,22 @@ func (d *deadline) close() {
 	d.Unlock()
 }
 
+// almostConn is almost a net.Conn. almostConn lacks deadline support, but does support an explicit
+// Handshake function.
+// TODO: check whether the wrapped RWC must guarantee net.Conn.Close behavior (currently no)
+// TODO: add doc regarding intended use case and lack of necessary concurrency support
+type almostConn interface {
+	io.ReadWriteCloser
+
+	// LocalAddr and RemoteAddr may be undefined until the handshake is complete.
+	LocalAddr() net.Addr
+	RemoteAddr() net.Addr
+
+	// Handshake initiates the connection. The first call to Read or Write should initiate the
+	// handshake if necessary.
+	Handshake() error
+}
+
 // deadlineReadWriter is used to add deadline support to an io.ReadWriteCloser. The intended use
 // case is in a net.Conn and some assumptions are made to this effect. One such assumption is that
 // the underlying ReadWriteCloser is a network transport and unlikely to block for long on Writes.
@@ -98,8 +114,10 @@ func (d *deadline) close() {
 // A consequence of using the deadlineReadWriter is that Reads and Writes will be single-threaded.
 //
 // All exported methods are concurrency-safe.
+// TODO: rename
+// TODO: update doc
 type deadlineReadWriter struct {
-	io.ReadWriteCloser
+	wrapped almostConn
 
 	// Fields in this block are protected by readLock.
 	//
@@ -119,7 +137,15 @@ type deadlineReadWriter struct {
 	// our use case (with an obfuscator.ObfuscatedSSHConn as the underlying ReadWriter) requires
 	// synchronization of Reads and Writes. Since we need a readLock, we add a writeLock as well for
 	// convenience.
+	// TODO: maybe this can just be a guarantee of the type
 	writeLock sync.Mutex
+
+	// TODO: can we abstract the handshake and close fields?
+
+	// Fields in this block are protected by shakeOnce.
+	shakeOnce     sync.Once
+	shakeErr      error
+	shakeComplete chan struct{}
 
 	// Fields in this block are protected by closeOnce.
 	closeOnce sync.Once
@@ -127,13 +153,14 @@ type deadlineReadWriter struct {
 	closed    chan struct{}
 }
 
-func addDeadlineSupport(rwc io.ReadWriteCloser) *deadlineReadWriter {
+func addDeadlineSupport(conn almostConn) *deadlineReadWriter {
 	closed := make(chan struct{})
 	return &deadlineReadWriter{
-		ReadWriteCloser: rwc,
-		readDeadline:    newDeadline(closed),
-		writeDeadline:   newDeadline(closed),
-		closed:          closed,
+		wrapped:       conn,
+		readDeadline:  newDeadline(closed),
+		writeDeadline: newDeadline(closed),
+		closed:        closed,
+		shakeComplete: make(chan struct{}),
 	}
 }
 
@@ -167,9 +194,12 @@ func (drw *deadlineReadWriter) Read(b []byte) (n int, err error) {
 			drw.buf = make([]byte, len(b))
 		}
 		go func() {
+			n, err := 0, drw.Handshake()
+			if err == nil {
+				n, err = drw.wrapped.Read(drw.buf[:len(b)])
+			}
 			// This routine does not hold the lock, but we know that drw.readResults will be valid
 			// until we send a value.
-			n, err := drw.ReadWriteCloser.Read(drw.buf[:len(b)])
 			select {
 			case drw.readResults <- ioResult{n, err}:
 			case <-drw.closed:
@@ -222,7 +252,10 @@ func (drw *deadlineReadWriter) Write(b []byte) (n int, err error) {
 	copy(bCopy, b)
 	writeResultC := make(chan ioResult, 1)
 	go func() {
-		n, err := drw.ReadWriteCloser.Write(bCopy)
+		n, err := 0, drw.Handshake()
+		if err == nil {
+			n, err = drw.wrapped.Write(bCopy)
+		}
 		select {
 		case writeResultC <- ioResult{n, err}:
 		case <-drw.closed:
@@ -244,15 +277,50 @@ func (drw *deadlineReadWriter) Write(b []byte) (n int, err error) {
 	}
 }
 
+// Handshake initiates the connection if necessary. It is safe to call this function multiple times.
+func (drw *deadlineReadWriter) Handshake() error {
+	drw.shakeOnce.Do(func() {
+		errC := make(chan error, 1)
+		go func() { errC <- drw.wrapped.Handshake() }()
+		select {
+		case drw.shakeErr = <-errC:
+		case <-drw.closed:
+			drw.shakeErr = net.ErrClosed
+		}
+		close(drw.shakeComplete)
+	})
+	return drw.shakeErr
+}
+
 // Close implements net.Conn.Close. It is safe to call Close multiple times.
 func (drw *deadlineReadWriter) Close() error {
 	drw.closeOnce.Do(func() {
 		close(drw.closed)
-		drw.closeErr = drw.ReadWriteCloser.Close()
+		drw.closeErr = drw.wrapped.Close()
 		drw.readDeadline.close()
 		drw.writeDeadline.close()
 	})
 	return drw.closeErr
+}
+
+// LocalAddr returns the local network address. Blocks until the handshake is complete and may
+// return nil if the handshake failed.
+func (drw *deadlineReadWriter) LocalAddr() net.Addr {
+	select {
+	case <-drw.shakeComplete:
+	case <-drw.closed:
+	}
+	return drw.wrapped.LocalAddr()
+}
+
+// LocalAddr returns the remote network address. Blocks until the handshake is complete and may
+// return nil if the handshake failed.
+func (drw *deadlineReadWriter) RemoteAddr() net.Addr {
+	select {
+	case <-drw.shakeComplete:
+	case <-drw.closed:
+	}
+	return drw.wrapped.RemoteAddr()
 }
 
 // SetReadDeadline implements net.Conn.SetReadDeadline.

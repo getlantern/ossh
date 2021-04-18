@@ -163,19 +163,19 @@ func (conn *conn) Handshake() error {
 	conn.shakeOnce.Do(func() {
 		shakeChan := make(chan error, 1)
 		go func() {
-			var rwc *sshReadWriteCloser
-			rwc, err := conn.handshake()
-			if err != nil {
-				shakeChan <- err
-				conn.closeErr <- nil
-				return
-			}
-			conn.deadlineReadWriter = addDeadlineSupport(rwc)
-			conn.localAddr, conn.remoteAddr = rwc.LocalAddr(), rwc.RemoteAddr()
-			shakeChan <- nil
+			// var rwc *sshReadWriteCloser
+			// rwc, err := conn.handshake()
+			// if err != nil {
+			// 	shakeChan <- err
+			// 	conn.closeErr <- nil
+			// 	return
+			// }
+			// conn.deadlineReadWriter = addDeadlineSupport(rwc)
+			// conn.localAddr, conn.remoteAddr = rwc.LocalAddr(), rwc.RemoteAddr()
+			// shakeChan <- nil
 
-			<-conn.closed
-			conn.closeErr <- conn.deadlineReadWriter.Close()
+			// <-conn.closed
+			// conn.closeErr <- conn.deadlineReadWriter.Close()
 		}()
 
 		select {
