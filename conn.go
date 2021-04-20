@@ -126,7 +126,7 @@ func (rwc *sshReadWriteCloser) Close() error                      { rwc.ch.Close
 
 type conn struct {
 	// Fields in this block are nil until the handshake is complete (iff shakeErr is nil).
-	*deadlineReadWriter
+	*fullConn
 	localAddr, remoteAddr net.Addr
 
 	handshake func() (*sshReadWriteCloser, error)
@@ -191,14 +191,14 @@ func (conn *conn) Read(b []byte) (n int, err error) {
 	if err := conn.Handshake(); err != nil {
 		return 0, err
 	}
-	return conn.deadlineReadWriter.Read(b)
+	return conn.fullConn.Read(b)
 }
 
 func (conn *conn) Write(b []byte) (n int, err error) {
 	if err := conn.Handshake(); err != nil {
 		return 0, err
 	}
-	return conn.deadlineReadWriter.Write(b)
+	return conn.fullConn.Write(b)
 }
 
 func (conn *conn) Close() error {

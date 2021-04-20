@@ -46,8 +46,8 @@ func TestDeadlineReadWriter(t *testing.T) {
 // makeDeadlineTestPipe implements nettest.MakePipe.
 func makeDeadlineTestPipe() (c1, c2 net.Conn, stop func(), err error) {
 	_c1, _c2 := net.Pipe()
-	c1 = addDeadlineSupport(noOpHandshaker{_c1})
-	c2 = addDeadlineSupport(noOpHandshaker{_c2})
+	c1 = newFullConn(noOpHandshaker{_c1})
+	c2 = newFullConn(noOpHandshaker{_c2})
 	return c1, c2, func() { c1.Close(); c2.Close() }, nil
 }
 
