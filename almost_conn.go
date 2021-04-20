@@ -53,7 +53,7 @@ type clientConn struct {
 	transport net.Conn
 	cfg       DialerConfig
 
-	// // Uninitialized until Handshake is called (iff no error is returned).
+	// Uninitialized until Handshake is called (iff no error is returned).
 	baseConn
 }
 

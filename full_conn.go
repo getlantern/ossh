@@ -118,9 +118,8 @@ type fullConn struct {
 	// TODO: can we abstract the handshake and close fields?
 
 	// Fields in this block are protected by shakeOnce.
-	shakeOnce     sync.Once
-	shakeErr      error
-	shakeComplete chan struct{}
+	shakeOnce sync.Once
+	shakeErr  error
 
 	// Fields in this block are protected by closeOnce.
 	closeOnce sync.Once
@@ -135,7 +134,6 @@ func newFullConn(conn almostConn) *fullConn {
 		readDeadline:  newDeadline(closed),
 		writeDeadline: newDeadline(closed),
 		closed:        closed,
-		shakeComplete: make(chan struct{}),
 	}
 }
 
@@ -262,7 +260,6 @@ func (drw *fullConn) Handshake() error {
 		case <-drw.closed:
 			drw.shakeErr = net.ErrClosed
 		}
-		close(drw.shakeComplete)
 	})
 	return drw.shakeErr
 }
@@ -306,12 +303,4 @@ func (drw *fullConn) isClosed() bool {
 	default:
 		return false
 	}
-}
-
-func newClientConn(transport net.Conn, cfg DialerConfig) *fullConn {
-	return newFullConn(&clientConn{transport, cfg, baseConn{nil, nil}})
-}
-
-func newServerConn(transport net.Conn, cfg ListenerConfig) *fullConn {
-	return newFullConn(&serverConn{transport, cfg, baseConn{nil, nil}})
 }
