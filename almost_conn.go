@@ -38,6 +38,8 @@ func discardChannels(chans <-chan ssh.NewChannel) {
 	}
 }
 
+// TODO: think about multiplexing via channels rather than assuming it will be layered on top
+
 // baseConn is an io.ReadWriteCloser over SSH, used to implement the almostConn interface.
 type baseConn struct {
 	conn ssh.Conn
@@ -47,6 +49,16 @@ type baseConn struct {
 func (conn *baseConn) Read(b []byte) (n int, err error)  { return conn.ch.Read(b) }
 func (conn *baseConn) Write(b []byte) (n int, err error) { return conn.ch.Write(b) }
 func (conn *baseConn) Close() error                      { conn.ch.Close(); return conn.conn.Close() }
+
+// The clientConn and serverConn types below use obfuscator.ObfuscatedSSHConn as the underlying
+// transport. This connection does not define behavior for concurrent calls to one of Read or Write:
+//
+// https://pkg.go.dev/github.com/Psiphon-Labs/psiphon-tunnel-core@v2.0.14+incompatible/psiphon/common/obfuscator#ObfuscatedSSHConn
+//
+// This is okay because the clientConn and serverConn are designed to be wrapped in a fullConn,
+// which enforces single-threaded Reads and Writes. If this changes or if the behavior of fullConn
+// changes, we should ensure that we still enforce single-threaded Reads and Writes to prevent
+// subtle errors.
 
 // clientConn implements the almostConn interface for OSSH connections.
 type clientConn struct {
