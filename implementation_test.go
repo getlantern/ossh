@@ -41,6 +41,8 @@ func TestDeadline(t *testing.T) {
 
 func TestFullConn(t *testing.T) {
 	nettest.TestConn(t, makeFullConnPipe)
+
+	// TODO: add tests for handshake operations (Close-Then-Handshake, Close-During-Handshake, etc.)
 }
 
 // makeFullConnPipe implements nettest.MakePipe.
