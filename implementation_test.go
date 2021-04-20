@@ -39,12 +39,13 @@ func TestDeadline(t *testing.T) {
 	require.True(t, d.expired())
 }
 
-func TestDeadlineReadWriter(t *testing.T) {
-	nettest.TestConn(t, makeDeadlineTestPipe)
+func TestFullConn(t *testing.T) {
+	nettest.TestConn(t, makeFullConnPipe)
 }
 
-// makeDeadlineTestPipe implements nettest.MakePipe.
-func makeDeadlineTestPipe() (c1, c2 net.Conn, stop func(), err error) {
+// makeFullConnPipe implements nettest.MakePipe.
+func makeFullConnPipe() (c1, c2 net.Conn, stop func(), err error) {
+	// TODO: we shouldn't use net.Pipe here as the resulting connections are more robust than defined by almostConn
 	_c1, _c2 := net.Pipe()
 	c1 = newFullConn(noOpHandshaker{_c1})
 	c2 = newFullConn(noOpHandshaker{_c2})
