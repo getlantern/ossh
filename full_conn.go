@@ -280,39 +280,17 @@ func (drw *fullConn) Close() error {
 	return drw.closeErr
 }
 
-// TODO: actually we should always be able to return the addresses
+// LocalAddr implements net.Conn.LocalAddr.
+func (drw *fullConn) LocalAddr() net.Addr { return drw.wrapped.LocalAddr() }
 
-// LocalAddr returns the local network address. Blocks until the handshake is complete and may
-// return nil if the handshake failed.
-func (drw *fullConn) LocalAddr() net.Addr {
-	select {
-	case <-drw.shakeComplete:
-	case <-drw.closed:
-	}
-	return drw.wrapped.LocalAddr()
-}
-
-// LocalAddr returns the remote network address. Blocks until the handshake is complete and may
-// return nil if the handshake failed.
-func (drw *fullConn) RemoteAddr() net.Addr {
-	select {
-	case <-drw.shakeComplete:
-	case <-drw.closed:
-	}
-	return drw.wrapped.RemoteAddr()
-}
+// RemoteAddr implements net.Conn.RemoteAddr.
+func (drw *fullConn) RemoteAddr() net.Addr { return drw.wrapped.RemoteAddr() }
 
 // SetReadDeadline implements net.Conn.SetReadDeadline.
-func (drw *fullConn) SetReadDeadline(t time.Time) error {
-	drw.readDeadline.set(t)
-	return nil
-}
+func (drw *fullConn) SetReadDeadline(t time.Time) error { drw.readDeadline.set(t); return nil }
 
 // SetWriteDeadline implements net.Conn.SetWriteDeadline.
-func (drw *fullConn) SetWriteDeadline(t time.Time) error {
-	drw.writeDeadline.set(t)
-	return nil
-}
+func (drw *fullConn) SetWriteDeadline(t time.Time) error { drw.writeDeadline.set(t); return nil }
 
 // SetDeadline implements net.Conn.SetDeadline.
 func (drw *fullConn) SetDeadline(t time.Time) error {
