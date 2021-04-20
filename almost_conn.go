@@ -86,7 +86,7 @@ func (conn *clientConn) Handshake() error {
 		return fmt.Errorf("ossh handshake failed: %w", err)
 	}
 
-	sshCfg := ssh.ClientConfig{HostKeyCallback: ssh.FixedHostKey(cfg.ServerPublicKey)}
+	sshCfg := ssh.ClientConfig{HostKeyCallback: ssh.FixedHostKey(conn.cfg.ServerPublicKey)}
 	sshConn, chans, reqs, err := ssh.NewClientConn(osshConn, "", &sshCfg)
 	if err != nil {
 		return fmt.Errorf("ssh handshake failed: %w", err)
