@@ -6,6 +6,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 type ioResult struct {
@@ -111,6 +113,24 @@ type almostConn interface {
 	// method which may be called afterwards is Close.
 	Handshake() error
 }
+
+// osshConn implements the almostConn interface.
+type osshConn struct {
+	conn      ssh.Conn
+	ch        ssh.Channel
+	handshake func() (ssh.Conn, ssh.Channel, error)
+}
+
+func newOSSHConn(handshake func() (ssh.Conn, ssh.Channel, error)) *osshConn {
+	return &osshConn{handshake: handshake}
+}
+
+func (conn *osshConn) LocalAddr() net.Addr               { return conn.conn.LocalAddr() }
+func (conn *osshConn) RemoteAddr() net.Addr              { return conn.conn.RemoteAddr() }
+func (conn *osshConn) Read(b []byte) (n int, err error)  { return conn.ch.Read(b) }
+func (conn *osshConn) Write(b []byte) (n int, err error) { return conn.ch.Write(b) }
+func (conn *osshConn) Close() error                      { conn.ch.Close(); return conn.conn.Close() }
+func (conn *osshConn) Handshake() (err error)            { conn.conn, conn.ch, err = conn.handshake(); return }
 
 // fullConn adds concurrency support and deadline handling to an almostConn. See the almostConn type
 // for requirements and assumptions about the behavior of this wrapped connection.
@@ -299,6 +319,8 @@ func (drw *fullConn) Close() error {
 	})
 	return drw.closeErr
 }
+
+// TODO: actually we should always be able to return the addresses
 
 // LocalAddr returns the local network address. Blocks until the handshake is complete and may
 // return nil if the handshake failed.
