@@ -1,0 +1,2 @@
+
+This is a copy of golang.org/x/net/nettest as of commit 064579744ee093986542bb85ff0b5ac3a7ee64c5. This copy was created to make a slight tweak to nettest.TestConn. The tweak is marked and explained in the code (with a comment beginning with "// == tweak =="). Any further tweaks should also be marked and explained, but ideally we shouldn't need any more tweaks.
