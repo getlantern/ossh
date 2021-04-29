@@ -90,6 +90,28 @@ func (d *deadline) close() {
 	d.Unlock()
 }
 
+// Enforces first-in, first-out, single-threaded operations between concurrent goroutines. Should be
+// closed when no longer in use (via the built-in channel close function).
+type fifoExecutor chan (<-chan struct{})
+
+func newFIFOExecutor() fifoExecutor {
+	reqs := make(chan (<-chan struct{}))
+	go func() {
+		for req := range reqs {
+			<-req
+		}
+	}()
+	return fifoExecutor(reqs)
+}
+
+// Calls the input function. Functions are invoked one-at-a-time in the order they are received.
+func (fe fifoExecutor) do(f func()) {
+	req := make(chan struct{})
+	fe <- req
+	f()
+	close(req)
+}
+
 // fullConn adds concurrency support and deadline handling to an almostConn. See the almostConn type
 // for requirements and assumptions about the behavior of this wrapped connection.
 //
@@ -113,7 +135,11 @@ type fullConn struct {
 	readDeadline, writeDeadline *deadline
 
 	// writeLock protects access to the Write method.
+	// TODO: is this still necessary?
 	writeLock sync.Mutex
+
+	// Ensures FIFO, single-threaded access to wrapped.Write.
+	writeExecutor fifoExecutor
 
 	// TODO: can we abstract the handshake and close fields?
 
@@ -133,6 +159,7 @@ func newFullConn(conn almostConn) *fullConn {
 		wrapped:       conn,
 		readDeadline:  newDeadline(closed),
 		writeDeadline: newDeadline(closed),
+		writeExecutor: newFIFOExecutor(),
 		closed:        closed,
 	}
 }
@@ -227,7 +254,7 @@ func (drw *fullConn) Write(b []byte) (n int, err error) {
 	go func() {
 		n, err := 0, drw.Handshake()
 		if err == nil {
-			n, err = drw.wrapped.Write(bCopy)
+			drw.writeExecutor.do(func() { n, err = drw.wrapped.Write(bCopy) })
 		}
 		select {
 		case writeResultC <- ioResult{n, err}:
