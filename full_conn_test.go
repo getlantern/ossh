@@ -52,8 +52,9 @@ func TestFIFOExecutor(t *testing.T) {
 		fe          = newFIFOExecutor()
 		ints        = []int{}
 		numRoutines = 10
+		closeOnce   = new(sync.Once)
 	)
-	defer close(fe)
+	defer closeOnce.Do(fe.close)
 
 	// Routines sleep an increasing amount of time to ensure they get in line in the expected order.
 	sleep := func(routineNum int) { time.Sleep(10 * time.Duration(routineNum) * time.Millisecond) }
@@ -73,13 +74,15 @@ func TestFIFOExecutor(t *testing.T) {
 	for i := 0; i < numRoutines; i++ {
 		require.Equal(t, i, ints[i])
 	}
+
+	// A closed executor should execute functions without blocking.
+	closeOnce.Do(fe.close)
+	executed := false
+	fe.do(func() { executed = true })
+	require.True(t, executed)
 }
 
 func TestFullConn(t *testing.T) {
-	// TODO: go test -race -count=1000 complains "limit on 8128 simultaneously alive goroutines is exceeded"
-	// Look into a possible memory leak (maybe deadline.set routines?). Once this is fixed, use
-	// almostConnPipe over net.Pipe in makeFullConnPipe.
-
 	nettest.TestConn(t, makeFullConnPipe)
 
 	// TODO: add tests for handshake operations (Close-Then-Handshake, Close-During-Handshake, etc.)

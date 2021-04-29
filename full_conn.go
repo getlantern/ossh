@@ -90,26 +90,43 @@ func (d *deadline) close() {
 	d.Unlock()
 }
 
-// Enforces first-in, first-out, single-threaded operations between concurrent goroutines. Should be
-// closed when no longer in use (via the built-in channel close function).
-type fifoExecutor chan (<-chan struct{})
+// Enforces first-in, first-out, single-threaded operations between concurrent goroutines.
+type fifoExecutor struct {
+	reqs   chan (<-chan struct{})
+	closed chan struct{}
+}
 
 func newFIFOExecutor() fifoExecutor {
 	reqs := make(chan (<-chan struct{}))
+	closed := make(chan struct{})
 	go func() {
-		for req := range reqs {
-			<-req
+		for {
+			select {
+			case req := <-reqs:
+				<-req
+			case <-closed:
+				return
+			}
 		}
 	}()
-	return fifoExecutor(reqs)
+	return fifoExecutor{reqs, closed}
 }
 
-// Calls the input function. Functions are invoked one-at-a-time in the order they are received.
+// Calls the input function. Functions are invoked one-at-a-time in the order they are received. A
+// closed fifoExecutor executes functions immediately, with no ordering or concurrency guarantees.
 func (fe fifoExecutor) do(f func()) {
 	req := make(chan struct{})
-	fe <- req
+	select {
+	case fe.reqs <- req:
+	case <-fe.closed:
+	}
 	f()
 	close(req)
+}
+
+// Should only be called once.
+func (fe fifoExecutor) close() {
+	close(fe.closed)
 }
 
 // fullConn adds concurrency support and deadline handling to an almostConn. See the almostConn type
@@ -297,6 +314,7 @@ func (drw *fullConn) Close() error {
 
 	drw.closeOnce.Do(func() {
 		close(drw.closed)
+		drw.writeExecutor.close()
 		drw.closeErr = drw.wrapped.Close()
 		drw.readDeadline.close()
 		drw.writeDeadline.close()
