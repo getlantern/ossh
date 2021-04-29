@@ -19,10 +19,11 @@ type almostConn interface {
 	// assumed to be short-lived. See fullConn.Write for more details.
 	io.ReadWriter
 
-	// Close must cause blocked Read and Write operations to unblock and return errors.
+	// Close must cause blocked Read and Write operations to unblock and return errors. This will
+	// only be called once.
 	Close() error
 
-	// LocalAddr and RemoteAddr may be called concurrently at any time.
+	// LocalAddr and RemoteAddr may be called at any time.
 	LocalAddr() net.Addr
 	RemoteAddr() net.Addr
 

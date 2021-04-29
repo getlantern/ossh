@@ -1,5 +1,8 @@
 // Package ossh provides facilities for creating network connections using obfuscated SSH.
 // See https://github.com/brl/obfuscated-openssh/blob/master/README.obfuscation
+//
+// Connections created by this package cannot guarantee true cancellation of Write calls. See the
+// Conn type for more details.
 package ossh
 
 import (
@@ -105,6 +108,14 @@ func WrapListener(l net.Listener, cfg ListenerConfig) Listener {
 }
 
 // Conn is a network connection between two peers over ossh.
+//
+// There is one minor difference between an ossh Conn and a net.Conn. A net.Conn allows for
+// cancellation of I/O operations via the Close or Set*Deadline methods. Because an ossh Conn relies
+// on a transport with no support for I/O cancellation, it cannot guarantee full cancellation of
+// Write calls. Thus a Write call may return with net.ErrClosed or os.ErrDeadlineExceeded, but the
+// buffered bytes may eventually be sent on the transport. In practice, this is unlikely to make
+// much difference as network writes do not generally block long. An internal buffer is used to
+// handle read cancellation.
 type Conn interface {
 	net.Conn
 
