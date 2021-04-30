@@ -1,7 +1,6 @@
 package ossh
 
 import (
-	"bytes"
 	"errors"
 	"io"
 	"net"
@@ -90,16 +89,11 @@ func TestFullConn(t *testing.T) {
 
 // makeFullConnPipe implements nettest.MakePipe.
 func makeFullConnPipe() (c1, c2 net.Conn, stop func(), err error) {
-	// TODO: we shouldn't use net.Pipe here as the resulting connections are more robust than defined by almostConn
-	_c1, _c2 := net.Pipe()
-	c1 = newFullConn(noOpHandshaker{_c1})
-	c2 = newFullConn(noOpHandshaker{_c2})
+	_c1, _c2 := almostConnPipe()
+	c1 = newFullConn(_c1)
+	c2 = newFullConn(_c2)
 	return c1, c2, func() { c1.Close(); c2.Close() }, nil
 }
-
-type noOpHandshaker struct{ net.Conn }
-
-func (noh noOpHandshaker) Handshake() error { return nil }
 
 func almostConnPipe() (almostConn, almostConn) {
 	rx1, tx1 := io.Pipe()
@@ -119,20 +113,20 @@ func (addr fakeAddr) String() string  { return "fake address: " + string(addr) }
 // concurrent Reads and Writes will result in errors.).
 type testAlmostConn struct {
 	rx            io.Reader
-	tx            io.Writer
+	tx            io.WriteCloser
 	closed        chan struct{}
 	handshakeWait <-chan error
 	handshakeDone chan struct{}
 
 	readSema, writeSema chan struct{}
 
-	// Optionally set this after initialization. Otherwise, it is initialized to the type name.
+	// Optionally set this after initialization. Otherwise it is initialized to the type name.
 	name string
 }
 
 // The Handshake will block until an error is sent on hsWait (or the channel is closed). The error
 // sent is returned by Handshake. If hsWait is nil, Handshake does not block and returns nil.
-func newTestAlmostConn(rx io.Reader, tx io.Writer, hsWait <-chan error) *testAlmostConn {
+func newTestAlmostConn(rx io.Reader, tx io.WriteCloser, hsWait <-chan error) *testAlmostConn {
 	if hsWait == nil {
 		closedChannel := make(chan error)
 		close(closedChannel)
@@ -159,7 +153,7 @@ func (conn *testAlmostConn) Handshake() error {
 
 func (conn *testAlmostConn) Read(b []byte) (n int, err error) {
 	select {
-	case <-conn.readSema:
+	case conn.readSema <- struct{}{}:
 	default:
 		return 0, errors.New("illegal concurrent read")
 	}
@@ -168,13 +162,13 @@ func (conn *testAlmostConn) Read(b []byte) (n int, err error) {
 	default:
 		return 0, errors.New("illegal read before handshake")
 	}
-	defer func() { conn.readSema <- struct{}{} }()
+	defer func() { <-conn.readSema }()
 	return conn.rx.Read(b)
 }
 
 func (conn *testAlmostConn) Write(b []byte) (n int, err error) {
 	select {
-	case <-conn.writeSema:
+	case conn.writeSema <- struct{}{}:
 	default:
 		return 0, errors.New("illegal concurrent write")
 	}
@@ -183,47 +177,19 @@ func (conn *testAlmostConn) Write(b []byte) (n int, err error) {
 	default:
 		return 0, errors.New("illegal write before handshake")
 	}
-	defer func() { conn.writeSema <- struct{}{} }()
-	return conn.rx.Read(b)
+	defer func() { <-conn.writeSema }()
+	return conn.tx.Write(b)
 }
 
 func (conn *testAlmostConn) Close() error {
 	select {
 	case <-conn.closed:
 		return errors.New("illegal extra close")
+	default:
+		conn.tx.Close()
+		return nil
 	}
 }
 
 func (conn *testAlmostConn) LocalAddr() net.Addr  { return fakeAddr(conn.name) }
 func (conn *testAlmostConn) RemoteAddr() net.Addr { return fakeAddr(conn.name) }
-
-// debugging - taken from nettest
-//
-// resyncConn resynchronizes the connection into a sane state.
-// It assumes that everything written into c is echoed back to itself.
-// It assumes that 0xff is not currently on the wire or in the read buffer.
-func resyncConn(t *testing.T, c net.Conn) {
-	t.Helper()
-
-	neverTimeout := time.Time{}
-	c.SetDeadline(neverTimeout)
-	errCh := make(chan error)
-	go func() {
-		_, err := c.Write([]byte{0xff})
-		errCh <- err
-	}()
-	buf := make([]byte, 1024)
-	for {
-		n, err := c.Read(buf)
-		if n > 0 && bytes.IndexByte(buf[:n], 0xff) == n-1 {
-			break
-		}
-		if err != nil {
-			t.Errorf("unexpected Read error: %v", err)
-			break
-		}
-	}
-	if err := <-errCh; err != nil {
-		t.Errorf("unexpected Write error: %v", err)
-	}
-}
