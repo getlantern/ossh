@@ -49,7 +49,19 @@ type baseConn struct {
 
 func (conn *baseConn) Read(b []byte) (n int, err error)  { return conn.ch.Read(b) }
 func (conn *baseConn) Write(b []byte) (n int, err error) { return conn.ch.Write(b) }
-func (conn *baseConn) Close() error                      { conn.ch.Close(); return conn.conn.Close() }
+
+func (conn *baseConn) Close() error {
+	var chErr error
+	// If the peer has already closed the connection, we'll get io.EOF. We ignore this.
+	if err := conn.ch.Close(); err != nil && !errors.Is(err, io.EOF) {
+		chErr = fmt.Errorf("failed to close channel: %w", chErr)
+	}
+	// If the peer has already closed the connection, we'll get net.ErrClosed. We ignore this.
+	if err := conn.conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		return err
+	}
+	return chErr
+}
 
 // The clientConn and serverConn types below use obfuscator.ObfuscatedSSHConn as the underlying
 // transport. This connection does not define behavior for concurrent calls to one of Read or Write:

@@ -311,6 +311,7 @@ func (drw *fullConn) Handshake() error {
 // Close implements net.Conn.Close. It is safe to call Close multiple times.
 func (drw *fullConn) Close() error {
 	// TODO: think about Handshake() -> Close() -> Handshake returns
+	// TODO: Close creates a nil-pointer panic pre-handshake
 
 	drw.closeOnce.Do(func() {
 		close(drw.closed)
