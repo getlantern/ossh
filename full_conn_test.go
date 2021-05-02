@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -82,9 +83,80 @@ func TestFIFOExecutor(t *testing.T) {
 }
 
 func TestFullConn(t *testing.T) {
+	// The time allowed for concurrent goroutines to get started and into the actual important bits.
+	// Empirically, this seems to take about 300 ns on a modern MacBook Pro.
+	const handshakeStartTime = 10 * time.Millisecond
+
+	var (
+		inThePast  = time.Now().Add(-1 * time.Hour)
+		noDeadline = time.Time{}
+	)
+
+	// Tests I/O, deadline support, net.Conn adherence, and data races.
 	nettest.TestConn(t, makeFullConnPipe)
 
-	// TODO: add tests for handshake operations (Close-Then-Handshake, Close-During-Handshake, etc.)
+	t.Run("CloseThenHandshake", func(t *testing.T) {
+		c1, c2, stop, err := makeFullConnPipe()
+		require.NoError(t, err)
+		defer stop()
+
+		require.NoError(t, c1.Close())
+		require.NoError(t, c2.Close())
+		require.ErrorIs(t, c1.(*fullConn).Handshake(), net.ErrClosed)
+		require.ErrorIs(t, c2.(*fullConn).Handshake(), net.ErrClosed)
+	})
+	t.Run("CloseOneThenHandshake", func(t *testing.T) {
+		c1, c2, stop, err := makeFullConnPipe()
+		require.NoError(t, err)
+		defer stop()
+
+		require.NoError(t, c1.Close())
+		require.ErrorIs(t, c1.(*fullConn).Handshake(), net.ErrClosed)
+		require.Error(t, c2.(*fullConn).Handshake())
+	})
+	t.Run("CloseDuringHandshake", func(t *testing.T) {
+		c1, c2, stop, err := makeFullConnPipe()
+		require.NoError(t, err)
+		defer stop()
+
+		errC := make(chan error)
+		go func() { errC <- c1.(*fullConn).Handshake() }()
+		// TODO: if we create a 'fullConn.shakeStarted' channel, make use of it here
+		time.Sleep(handshakeStartTime)
+		require.NoError(t, c1.Close())
+		require.ErrorIs(t, <-errC, net.ErrClosed)
+		require.Error(t, c2.(*fullConn).Handshake())
+	})
+	t.Run("TimeoutThenHandshake", func(t *testing.T) {
+		c1, c2, stop, err := makeFullConnPipe()
+		require.NoError(t, err)
+		defer stop()
+
+		require.NoError(t, c1.SetDeadline(inThePast))
+		require.ErrorIs(t, c1.(*fullConn).Handshake(), os.ErrDeadlineExceeded)
+
+		// Should be able to recover.
+		errC := make(chan error)
+		require.NoError(t, c1.SetDeadline(noDeadline))
+		go func() { errC <- c2.(*fullConn).Handshake() }()
+		require.NoError(t, c1.(*fullConn).Handshake())
+	})
+	t.Run("TimeoutDuringHandshake", func(t *testing.T) {
+		c1, c2, stop, err := makeFullConnPipe()
+		require.NoError(t, err)
+		defer stop()
+
+		c1.SetDeadline(time.Now().Add(handshakeStartTime))
+
+		errC := make(chan error)
+		go func() { errC <- c1.(*fullConn).Handshake() }()
+		require.ErrorIs(t, <-errC, os.ErrDeadlineExceeded)
+
+		// Should be able to recover.
+		require.NoError(t, c1.SetDeadline(noDeadline))
+		go func() { errC <- c2.(*fullConn).Handshake() }()
+		require.NoError(t, c1.(*fullConn).Handshake())
+	})
 }
 
 // makeFullConnPipe implements nettest.MakePipe.
