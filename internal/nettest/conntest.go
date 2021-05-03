@@ -388,16 +388,6 @@ func testConcurrentMethods(t *testing.T, c1, c2 net.Conn) {
 	}
 	wg.Wait() // At worst, the deadline is set 10ms into the future
 
-	// == tweak ==
-	// An ossh.Conn cannot guarantee that Writes will actually cancel (see the godoc). To achieve
-	// pseudo-cancellation, the transport Write happens in a separate goroutine. resyncConn is
-	// invoked below to flush the connection before testRoundtrip is called. However, it is possible
-	// for transport Write calls to be scheduled after resyncConn returns, causing testRoundtrip to
-	// fail or hang (depending on the behavior of the underlying transport). Introducing a brief
-	// sleep ensures these goroutines get their writes flushed by resyncConn.
-	time.Sleep(20 * time.Millisecond)
-	// == end tweak ==
-
 	resyncConn(t, c1)
 	testRoundtrip(t, c1)
 }
@@ -442,6 +432,15 @@ func testRoundtrip(t *testing.T, c net.Conn) {
 func resyncConn(t *testing.T, c net.Conn) {
 	t.Helper()
 	c.SetDeadline(neverTimeout)
+
+	// == tweak ==
+	// An ossh.Conn cannot guarantee that Writes will actually cancel (see the godoc). To achieve
+	// pseudo-cancellation, the transport Write happens in a separate goroutine. It is possible for
+	// transport Write calls to be scheduled after resyncConn returns, causing future tests to fail
+	// or hang. Introducing a brief sleep ensures these goroutines get their writes flushed.
+	time.Sleep(20 * time.Millisecond)
+	// == end tweak ==
+
 	errCh := make(chan error)
 	go func() {
 		_, err := c.Write([]byte{0xff})
