@@ -121,6 +121,12 @@ type Conn interface {
 
 	// Handshake executes an ossh handshake with the peer. Most users of this package need not call
 	// this function directly; the first Read or Write will trigger a handshake if needed.
+	//
+	// The Set*Deadline functions do not apply to this function. If the handshake is initiated by
+	// Read or Write, the corresponding deadline will apply.
+	//
+	// This function will unblock and return net.ErrClosed if the connection is closed before or
+	// during the handshake.
 	Handshake() error
 }
 

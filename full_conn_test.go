@@ -3,8 +3,10 @@ package ossh
 import (
 	"errors"
 	"io"
+	mathrand "math/rand"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -83,6 +85,19 @@ func TestFIFOExecutor(t *testing.T) {
 }
 
 func TestFullConn(t *testing.T) {
+	// Tests I/O, deadline support, net.Conn adherence, and data races.
+	nettest.TestConn(t, makeFullConnPipe)
+
+	// Tests calls to Close and SetDeadline before and during the handshake.
+	testHandshake(t, makeFullConnPipe)
+}
+
+type handshaker interface {
+	Handshake() error
+}
+
+// Assumes the net.Conn instances returned by mp implement the handshaker interface.
+func testHandshake(t *testing.T, mp nettest.MakePipe) {
 	// The time allowed for concurrent goroutines to get started and into the actual important bits.
 	// Empirically, this seems to take about 300 ns on a modern MacBook Pro.
 	const handshakeStartTime = 10 * time.Millisecond
@@ -92,9 +107,6 @@ func TestFullConn(t *testing.T) {
 		noDeadline = time.Time{}
 	)
 
-	// Tests I/O, deadline support, net.Conn adherence, and data races.
-	nettest.TestConn(t, makeFullConnPipe)
-
 	t.Run("CloseThenHandshake", func(t *testing.T) {
 		c1, c2, stop, err := makeFullConnPipe()
 		require.NoError(t, err)
@@ -102,8 +114,8 @@ func TestFullConn(t *testing.T) {
 
 		require.NoError(t, c1.Close())
 		require.NoError(t, c2.Close())
-		require.ErrorIs(t, c1.(*fullConn).Handshake(), net.ErrClosed)
-		require.ErrorIs(t, c2.(*fullConn).Handshake(), net.ErrClosed)
+		require.ErrorIs(t, c1.(handshaker).Handshake(), net.ErrClosed)
+		require.ErrorIs(t, c2.(handshaker).Handshake(), net.ErrClosed)
 	})
 	t.Run("CloseOneThenHandshake", func(t *testing.T) {
 		c1, c2, stop, err := makeFullConnPipe()
@@ -111,8 +123,8 @@ func TestFullConn(t *testing.T) {
 		defer stop()
 
 		require.NoError(t, c1.Close())
-		require.ErrorIs(t, c1.(*fullConn).Handshake(), net.ErrClosed)
-		require.Error(t, c2.(*fullConn).Handshake())
+		require.ErrorIs(t, c1.(handshaker).Handshake(), net.ErrClosed)
+		require.Error(t, c2.(handshaker).Handshake())
 	})
 	t.Run("CloseDuringHandshake", func(t *testing.T) {
 		c1, c2, stop, err := makeFullConnPipe()
@@ -121,11 +133,10 @@ func TestFullConn(t *testing.T) {
 
 		errC := make(chan error)
 		go func() { errC <- c1.(*fullConn).Handshake() }()
-		// TODO: if we create a 'fullConn.shakeStarted' channel, make use of it here
 		time.Sleep(handshakeStartTime)
 		require.NoError(t, c1.Close())
 		require.ErrorIs(t, <-errC, net.ErrClosed)
-		require.Error(t, c2.(*fullConn).Handshake())
+		require.Error(t, c2.(handshaker).Handshake())
 	})
 	t.Run("TimeoutThenHandshake", func(t *testing.T) {
 		c1, c2, stop, err := makeFullConnPipe()
@@ -133,13 +144,16 @@ func TestFullConn(t *testing.T) {
 		defer stop()
 
 		require.NoError(t, c1.SetDeadline(inThePast))
-		require.ErrorIs(t, c1.(*fullConn).Handshake(), os.ErrDeadlineExceeded)
+
+		// Initiate the handshake with a Read. Handshake does not itself support deadlines.
+		_, err = c1.Read(make([]byte, 10))
+		require.ErrorIs(t, err, os.ErrDeadlineExceeded)
 
 		// Should be able to recover.
 		errC := make(chan error)
 		require.NoError(t, c1.SetDeadline(noDeadline))
-		go func() { errC <- c2.(*fullConn).Handshake() }()
-		require.NoError(t, c1.(*fullConn).Handshake())
+		go func() { errC <- c2.(handshaker).Handshake() }()
+		require.NoError(t, c1.(handshaker).Handshake())
 	})
 	t.Run("TimeoutDuringHandshake", func(t *testing.T) {
 		c1, c2, stop, err := makeFullConnPipe()
@@ -148,14 +162,18 @@ func TestFullConn(t *testing.T) {
 
 		c1.SetDeadline(time.Now().Add(handshakeStartTime))
 
+		// Initiate the handshake with a Read. Handshake does not itself support deadlines.
 		errC := make(chan error)
-		go func() { errC <- c1.(*fullConn).Handshake() }()
+		go func() {
+			_, err := c1.Read(make([]byte, 10))
+			errC <- err
+		}()
 		require.ErrorIs(t, <-errC, os.ErrDeadlineExceeded)
 
 		// Should be able to recover.
 		require.NoError(t, c1.SetDeadline(noDeadline))
-		go func() { errC <- c2.(*fullConn).Handshake() }()
-		require.NoError(t, c1.(*fullConn).Handshake())
+		go func() { errC <- c2.(handshaker).Handshake() }()
+		require.NoError(t, c1.(handshaker).Handshake())
 	})
 }
 
@@ -167,14 +185,6 @@ func makeFullConnPipe() (c1, c2 net.Conn, stop func(), err error) {
 	return c1, c2, func() { c1.Close(); c2.Close() }, nil
 }
 
-func almostConnPipe() (almostConn, almostConn) {
-	rx1, tx1 := io.Pipe()
-	rx2, tx2 := io.Pipe()
-	tac1 := newTestAlmostConn(rx1, tx2, nil)
-	tac2 := newTestAlmostConn(rx2, tx1, nil)
-	return tac1, tac2
-}
-
 type fakeAddr string
 
 func (addr fakeAddr) Network() string { return "fake network" }
@@ -184,43 +194,75 @@ func (addr fakeAddr) String() string  { return "fake address: " + string(addr) }
 // interface. In particular, this type enforces the minimum required by almostConn (for example,
 // concurrent Reads and Writes will result in errors.).
 type testAlmostConn struct {
-	rx            io.Reader
-	tx            io.WriteCloser
-	closed        chan struct{}
-	handshakeWait <-chan error
-	handshakeDone chan struct{}
+	rx                           io.Reader
+	tx                           io.WriteCloser
+	closed, peerClosed           chan struct{}
+	handshaking, peerHandshaking chan struct{}
+	handshakeDone                chan struct{}
 
 	readSema, writeSema chan struct{}
 
-	// Optionally set this after initialization. Otherwise it is initialized to the type name.
+	// Optionally set this after initialization. Otherwise it is initialized to a random identifier.
 	name string
 }
 
-// The Handshake will block until an error is sent on hsWait (or the channel is closed). The error
-// sent is returned by Handshake. If hsWait is nil, Handshake does not block and returns nil.
-func newTestAlmostConn(rx io.Reader, tx io.WriteCloser, hsWait <-chan error) *testAlmostConn {
-	if hsWait == nil {
-		closedChannel := make(chan error)
-		close(closedChannel)
-		hsWait = closedChannel
+func almostConnPipe() (almostConn, almostConn) {
+	var (
+		rx1, tx1           = io.Pipe()
+		rx2, tx2           = io.Pipe()
+		closed1, closed2   = make(chan struct{}), make(chan struct{})
+		shaking1, shaking2 = make(chan struct{}), make(chan struct{})
+	)
+	c1 := &testAlmostConn{
+		rx: rx1, tx: tx2,
+		closed:          closed1,
+		peerClosed:      closed2,
+		handshaking:     shaking1,
+		peerHandshaking: shaking2,
+		handshakeDone:   make(chan struct{}),
+		readSema:        make(chan struct{}, 1),
+		writeSema:       make(chan struct{}, 1),
+		name:            "testAlmostConn" + strconv.Itoa(mathrand.Int()),
 	}
-	conn := &testAlmostConn{
-		rx: rx, tx: tx,
-		closed:        make(chan struct{}),
-		handshakeWait: hsWait,
-		handshakeDone: make(chan struct{}),
-
-		readSema:  make(chan struct{}, 1),
-		writeSema: make(chan struct{}, 1),
-		name:      "testAlmostConn",
+	c2 := &testAlmostConn{
+		rx: rx2, tx: tx1,
+		closed:          closed2,
+		peerClosed:      closed1,
+		handshaking:     shaking2,
+		peerHandshaking: shaking1,
+		handshakeDone:   make(chan struct{}),
+		readSema:        make(chan struct{}, 1),
+		writeSema:       make(chan struct{}, 1),
+		name:            "testAlmostConn" + strconv.Itoa(mathrand.Int()),
 	}
-	return conn
+	return c1, c2
 }
 
 func (conn *testAlmostConn) Handshake() error {
-	err := <-conn.handshakeWait
-	close(conn.handshakeDone)
-	return err
+	close(conn.handshaking)
+	defer close(conn.handshakeDone)
+
+	// Block until one of the following:
+	select {
+	case <-conn.closed:
+	case <-conn.peerClosed:
+	case <-conn.peerHandshaking:
+	}
+
+	// Have we closed?
+	select {
+	case <-conn.closed:
+		return net.ErrClosed
+	default:
+		// Has the peer closed?
+		select {
+		case <-conn.peerClosed:
+			return io.EOF
+		default:
+			// Nobody has closed and the peer must be handshaking too.
+			return nil
+		}
+	}
 }
 
 func (conn *testAlmostConn) Read(b []byte) (n int, err error) {
@@ -259,6 +301,7 @@ func (conn *testAlmostConn) Close() error {
 		return errors.New("illegal extra close")
 	default:
 		conn.tx.Close()
+		close(conn.closed)
 		return nil
 	}
 }
