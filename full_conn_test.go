@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -132,11 +133,15 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		defer stop()
 
 		errC := make(chan error)
-		go func() { errC <- c1.(*fullConn).Handshake() }()
+		go func() { errC <- c1.(handshaker).Handshake() }()
 		time.Sleep(handshakeStartTime)
 		require.NoError(t, c1.Close())
 		require.ErrorIs(t, <-errC, net.ErrClosed)
-		require.Error(t, c2.(handshaker).Handshake())
+
+		// Though c1's Handshake call returned, the spawned handshake routine is still waiting in
+		// the background. There is no way to kill this routine as the underlying transport does not
+		// support I/O cancellation. We initiate a handshake from c2 to avoid leaking the goroutine.
+		c2.(handshaker).Handshake()
 	})
 	t.Run("TimeoutThenHandshake", func(t *testing.T) {
 		c1, c2, stop, err := makeFullConnPipe()
@@ -191,14 +196,17 @@ func (addr fakeAddr) Network() string { return "fake network" }
 func (addr fakeAddr) String() string  { return "fake address: " + string(addr) }
 
 // testAlmostConn implements almostConn for testing fullConn's implementation of the net.Conn
-// interface. In particular, this type enforces the minimum required by almostConn (for example,
-// concurrent Reads and Writes will result in errors.).
+// interface. In particular, this type enforces the strictest requirements of almostConn (for
+// example, concurrent Reads and Writes will result in errors).
 type testAlmostConn struct {
 	rx                           io.Reader
 	tx                           io.WriteCloser
 	closed, peerClosed           chan struct{}
 	handshaking, peerHandshaking chan struct{}
 	handshakeDone                chan struct{}
+
+	// Zero iff no error or not yet complete.
+	handshakeErr int64
 
 	readSema, writeSema chan struct{}
 
@@ -239,8 +247,21 @@ func almostConnPipe() (almostConn, almostConn) {
 }
 
 func (conn *testAlmostConn) Handshake() error {
-	close(conn.handshaking)
 	defer close(conn.handshakeDone)
+	err := conn.handshake()
+	if err != nil {
+		atomic.StoreInt64(&conn.handshakeErr, 1)
+	}
+	return err
+}
+
+func (conn *testAlmostConn) handshake() error {
+	select {
+	case <-conn.handshaking:
+		return errors.New("illegal second handshake")
+	default:
+		close(conn.handshaking)
+	}
 
 	// Block until one of the following:
 	select {
@@ -265,6 +286,10 @@ func (conn *testAlmostConn) Handshake() error {
 	}
 }
 
+func (conn *testAlmostConn) handshakeReturnedError() bool {
+	return atomic.LoadInt64(&conn.handshakeErr) == 1
+}
+
 func (conn *testAlmostConn) Read(b []byte) (n int, err error) {
 	select {
 	case conn.readSema <- struct{}{}:
@@ -273,6 +298,9 @@ func (conn *testAlmostConn) Read(b []byte) (n int, err error) {
 	}
 	select {
 	case <-conn.handshakeDone:
+		if conn.handshakeReturnedError() {
+			return 0, errors.New("illegal read after handshake error")
+		}
 	default:
 		return 0, errors.New("illegal read before handshake")
 	}
@@ -288,6 +316,9 @@ func (conn *testAlmostConn) Write(b []byte) (n int, err error) {
 	}
 	select {
 	case <-conn.handshakeDone:
+		if conn.handshakeReturnedError() {
+			return 0, errors.New("illegal write after handshake error")
+		}
 	default:
 		return 0, errors.New("illegal write before handshake")
 	}
@@ -296,11 +327,27 @@ func (conn *testAlmostConn) Write(b []byte) (n int, err error) {
 }
 
 func (conn *testAlmostConn) Close() error {
+	// This channel will be closed iff the handshake overlaps this function call.
+	var handshakeStarted <-chan struct{}
+
+	select {
+	case <-conn.handshakeDone:
+		if conn.handshakeReturnedError() {
+			return errors.New("illegal close after handshake error")
+		}
+		// Handshake is already done; create a channel which never closes.
+		handshakeStarted = make(chan struct{})
+	default:
+		handshakeStarted = conn.handshaking
+	}
+
+	conn.tx.Close()
 	select {
 	case <-conn.closed:
 		return errors.New("illegal extra close")
+	case <-handshakeStarted:
+		return errors.New("illegal close during handshake")
 	default:
-		conn.tx.Close()
 		close(conn.closed)
 		return nil
 	}

@@ -168,16 +168,21 @@ type fullConn struct {
 	closeOnce sync.Once
 	closeErr  error
 	closed    chan struct{}
+
+	// We cannot call Handshake and Close concurrently on the wrapped connection. This binary
+	// semaphore is used to synchronize calls to both methods.
+	handshakeOrCloseSema chan struct{}
 }
 
 func newFullConn(conn almostConn) *fullConn {
 	closed := make(chan struct{})
 	return &fullConn{
-		wrapped:       conn,
-		readDeadline:  newDeadline(closed),
-		writeDeadline: newDeadline(closed),
-		writeExecutor: newFIFOExecutor(),
-		closed:        closed,
+		wrapped:              conn,
+		readDeadline:         newDeadline(closed),
+		writeDeadline:        newDeadline(closed),
+		writeExecutor:        newFIFOExecutor(),
+		closed:               closed,
+		handshakeOrCloseSema: make(chan struct{}, 1),
 	}
 }
 
@@ -298,7 +303,15 @@ func (drw *fullConn) Write(b []byte) (n int, err error) {
 func (drw *fullConn) Handshake() error {
 	drw.shakeOnce.Do(func() {
 		errC := make(chan error, 1)
-		go func() { errC <- drw.wrapped.Handshake() }()
+		go func() {
+			select {
+			case drw.handshakeOrCloseSema <- struct{}{}:
+				errC <- drw.wrapped.Handshake()
+				<-drw.handshakeOrCloseSema
+			default:
+				// The connection must be closing. Abandon handshake.
+			}
+		}()
 		select {
 		case drw.shakeErr = <-errC:
 		case <-drw.closed:
@@ -310,15 +323,24 @@ func (drw *fullConn) Handshake() error {
 
 // Close implements net.Conn.Close. It is safe to call Close multiple times.
 func (drw *fullConn) Close() error {
-	// TODO: think about Handshake() -> Close() -> Handshake returns
-	// TODO: Close creates a nil-pointer panic pre-handshake
-
 	drw.closeOnce.Do(func() {
 		close(drw.closed)
 		drw.writeExecutor.close()
-		drw.closeErr = drw.wrapped.Close()
 		drw.readDeadline.close()
 		drw.writeDeadline.close()
+		select {
+		case drw.handshakeOrCloseSema <- struct{}{}:
+			drw.closeErr = drw.wrapped.Close()
+			// Retain the semaphore to prevent future handshakes.
+		default:
+			// Handshake ongoing. Launch a routine to wait and close. In this (likely rare) case, we
+			// fib about the connection being completely closed.
+			go func() {
+				drw.handshakeOrCloseSema <- struct{}{}
+				drw.wrapped.Close()
+				// Retain the semaphore to prevent future handshakes.
+			}()
+		}
 	})
 	return drw.closeErr
 }

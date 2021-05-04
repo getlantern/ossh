@@ -27,9 +27,9 @@ type almostConn interface {
 	LocalAddr() net.Addr
 	RemoteAddr() net.Addr
 
-	// Handshake initiates the connection. This method will be called exactly once and Read or Write
-	// will not be called until this method returns. If this method returns an error, the only
-	// method which may be called afterwards is Close.
+	// Handshake initiates the connection. This method will be called exactly once. Read and Write
+	// will not be called until this function returns and only if no error is returned. Close will
+	// not be called concurrently, but may be called before or after.
 	Handshake() error
 }
 
@@ -62,6 +62,8 @@ func (conn *baseConn) Close() error {
 	}
 	return chErr
 }
+
+// TODO: ensure resources are cleaned up in early exits of Handshake functions below
 
 // The clientConn and serverConn types below use obfuscator.ObfuscatedSSHConn as the underlying
 // transport. This connection does not define behavior for concurrent calls to one of Read or Write:
