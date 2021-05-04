@@ -126,7 +126,8 @@ type Conn interface {
 	// Read or Write, the corresponding deadline will apply.
 	//
 	// This function will unblock and return net.ErrClosed if the connection is closed before or
-	// during the handshake.
+	// during the handshake. As explained in the type documentation, full I/O cancellation is not
+	// possible, so the handshake may still occur in the background after such cancellation.
 	Handshake() error
 }
 
