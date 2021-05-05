@@ -94,12 +94,14 @@ func makePipe() (c1, c2 net.Conn, stop func(), err error) {
 			_client = res.conn
 		}
 	}
-	client, server := coordinateClose(_client, _server)
-	return client, server, func() { client.Close(); server.Close() }, nil
+	c1, c2, stop = coordinateClose(_client, _server)
+	return
 }
 
 func TestConn(t *testing.T) {
 	nettest.TestConn(t, makePipe)
+
+	// TODO: use testHandshake?
 }
 
 // debugging
@@ -146,31 +148,32 @@ func TestBasicIO(t *testing.T) {
 type coordinatedCloser struct {
 	Conn
 
-	myReads, myWrites, peerReads chan int
-	closing, readyToClose        chan struct{}
-	pendingWrites                int64
-	closeOnce                    *sync.Once
-	closeErr                     error
+	myReads, myWrites, peerReads       chan int
+	closing, peerClosing, readyToClose chan struct{}
+	pendingWrites                      int64
+	closeOnce                          *sync.Once
+	closeErr                           error
 }
 
-func coordinateClose(c1, c2 Conn) (Conn, Conn) {
+func coordinateClose(c1, c2 Conn) (cc1, cc2 Conn, stop func()) {
 	var (
-		c1Reads, c1Writes = make(chan int), make(chan int)
-		c2Reads, c2Writes = make(chan int), make(chan int)
+		c1Reads, c1Writes    = make(chan int), make(chan int)
+		c2Reads, c2Writes    = make(chan int), make(chan int)
+		c1Closing, c2Closing = make(chan struct{}), make(chan struct{})
 	)
 	_c1 := coordinatedCloser{
 		c1, c1Reads, c1Writes, c2Reads,
-		make(chan struct{}), make(chan struct{}),
+		c1Closing, c2Closing, make(chan struct{}),
 		0, new(sync.Once), nil,
 	}
 	_c2 := coordinatedCloser{
 		c2, c2Reads, c2Writes, c1Reads,
-		make(chan struct{}), make(chan struct{}),
+		c2Closing, c1Closing, make(chan struct{}),
 		0, new(sync.Once), nil,
 	}
 	go _c1.watchPeerReads()
 	go _c2.watchPeerReads()
-	return _c1, _c2
+	return _c1, _c2, func() { go _c1.Close(); _c2.Close() }
 }
 
 func (cc coordinatedCloser) Read(b []byte) (n int, err error) {
@@ -196,6 +199,16 @@ func (cc coordinatedCloser) Write(b []byte) (n int, err error) {
 
 func (cc coordinatedCloser) watchPeerReads() {
 	var myWriteTotal, peerReadTotal int
+
+	readyToClose := func() bool {
+		select {
+		case <-cc.peerClosing:
+			return true
+		default:
+			return atomic.LoadInt64(&cc.pendingWrites) == 0 && peerReadTotal >= myWriteTotal
+		}
+	}
+
 	// Turns into a busy loop when closing, but that shouldn't last long.
 	for {
 		select {
@@ -204,7 +217,7 @@ func (cc coordinatedCloser) watchPeerReads() {
 		case n := <-cc.peerReads:
 			peerReadTotal += n
 		case <-cc.closing:
-			if atomic.LoadInt64(&cc.pendingWrites) == 0 && peerReadTotal >= myWriteTotal {
+			if readyToClose() {
 				close(cc.readyToClose)
 				return
 			}
