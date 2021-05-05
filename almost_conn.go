@@ -131,6 +131,14 @@ func (conn *clientConn) Handshake() error {
 	return nil
 }
 
+func (conn *clientConn) Close() error {
+	if conn.conn == nil {
+		// Handshake has not yet occurred.
+		return conn.transport.Close()
+	}
+	return conn.baseConn.Close()
+}
+
 // serverConn implements the almostConn interface for OSSH connections.
 type serverConn struct {
 	transport net.Conn
@@ -181,4 +189,12 @@ func (conn *serverConn) Handshake() error {
 
 	conn.conn, conn.ch = sshConn, channel
 	return nil
+}
+
+func (conn *serverConn) Close() error {
+	if conn.conn == nil {
+		// Handshake has not yet occurred.
+		return conn.transport.Close()
+	}
+	return conn.baseConn.Close()
 }
