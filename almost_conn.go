@@ -21,6 +21,7 @@ type almostConn interface {
 
 	// Close must cause blocked Read and Write operations to unblock and return errors. This will
 	// only be called once.
+	// TODO: Is this actually required? If so, is this implemented?
 	Close() error
 
 	// LocalAddr and RemoteAddr may be called at any time.
@@ -64,6 +65,7 @@ func (conn *baseConn) Close() error {
 }
 
 // TODO: ensure resources are cleaned up in early exits of Handshake functions below
+// TODO: the discard routines launched in Handshake functions might be leaked?
 
 // The clientConn and serverConn types below use obfuscator.ObfuscatedSSHConn as the underlying
 // transport. This connection does not define behavior for concurrent calls to one of Read or Write:
