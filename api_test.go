@@ -1,21 +1,69 @@
 package ossh
 
 import (
-	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"fmt"
-	"io"
-	mathrand "math/rand"
 	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/getlantern/ossh/internal/nettest"
-	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 )
+
+func makePipeTCP() (c1, c2 net.Conn, stop func(), err error) {
+	l, err := net.Listen("tcp", "")
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to start TCP listener: %w", err)
+	}
+	defer l.Close()
+
+	type result struct {
+		conn net.Conn
+		err  error
+	}
+
+	serverResC := make(chan result, 1)
+	clientResC := make(chan result, 1)
+	go func() {
+		conn, err := func() (net.Conn, error) {
+			conn, err := l.Accept()
+			if err != nil {
+				return nil, fmt.Errorf("accept error: %w", err)
+			}
+			return conn, nil
+		}()
+		serverResC <- result{conn, err}
+	}()
+	go func() {
+		conn, err := func() (net.Conn, error) {
+			conn, err := net.Dial("tcp", l.Addr().String())
+			if err != nil {
+				return nil, fmt.Errorf("dial error: %w", err)
+			}
+			return conn, nil
+		}()
+		clientResC <- result{conn, err}
+	}()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case res := <-clientResC:
+			if res.err != nil {
+				return nil, nil, nil, fmt.Errorf("failed to init client-side: %w", err)
+			}
+			c1 = res.conn
+		case res := <-serverResC:
+			if res.err != nil {
+				return nil, nil, nil, fmt.Errorf("failed to init server-side: %w", err)
+			}
+			c2 = res.conn
+		}
+	}
+	return c1, c2, func() { c1.Close(); c2.Close() }, nil
+}
 
 // makePipe implements nettest.MakePipe.
 func makePipe() (c1, c2 net.Conn, stop func(), err error) {
@@ -41,60 +89,17 @@ func makePipe() (c1, c2 net.Conn, stop func(), err error) {
 
 	// It would be simpler to use net.Pipe to set up the peer connections (maybe with some internal
 	// buffering as in tlsmasq/internal/testutil.BufferedPipe). However, golang.org/x/crypto/ssh
-	// does not seem to like these piped connections. Instead, we just set up a local listener.
+	// does not seem to like these piped connections. Instead, we set up a pair of TCP connections.
 
-	_l, err := net.Listen("tcp", "")
+	c1TCP, c2TCP, _, err := makePipeTCP()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to start TCP listener: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to create TCP pipe: %w", err)
 	}
-	l := WrapListener(_l, lCfg)
-	d := WrapDialer(&net.Dialer{}, dCfg)
-	defer l.Close()
-
-	type result struct {
-		conn Conn
-		err  error
-	}
-
-	serverResC := make(chan result, 1)
-	clientResC := make(chan result, 1)
-	go func() {
-		conn, err := func() (Conn, error) {
-			conn, err := l.Accept()
-			if err != nil {
-				return nil, fmt.Errorf("accept error: %w", err)
-			}
-			return conn, nil
-		}()
-		serverResC <- result{conn, err}
-	}()
-	go func() {
-		conn, err := func() (Conn, error) {
-			conn, err := d.Dial("tcp", l.Addr().String())
-			if err != nil {
-				return nil, fmt.Errorf("dial error: %w", err)
-			}
-			return conn, nil
-		}()
-		clientResC <- result{conn, err}
-	}()
-
-	var _server, _client Conn
-	for i := 0; i < 2; i++ {
-		select {
-		case res := <-serverResC:
-			if res.err != nil {
-				return nil, nil, nil, fmt.Errorf("failed to init server-side: %w", err)
-			}
-			_server = res.conn
-		case res := <-clientResC:
-			if res.err != nil {
-				return nil, nil, nil, fmt.Errorf("failed to init client-side: %w", err)
-			}
-			_client = res.conn
-		}
-	}
-	c1, c2, stop = coordinateClose(_client, _server)
+	var c1Almost almostConn = &clientConn{c1TCP, dCfg, baseConn{nil, nil}}
+	var c2Almost almostConn = &serverConn{c2TCP, lCfg, baseConn{nil, nil}}
+	c1Almost, c2Almost = coordinateClose(c1Almost, c2Almost)
+	c1, c2 = newFullConn(c1Almost), newFullConn(c2Almost)
+	stop = func() { c1.Close(); c2.Close() }
 	return
 }
 
@@ -104,49 +109,12 @@ func TestConn(t *testing.T) {
 	// TODO: use testHandshake?
 }
 
-// debugging
-func TestBasicIO(t *testing.T) {
-	c1, c2, stop, err := makePipe()
-	require.NoError(t, err)
-	defer stop()
-
-	want := make([]byte, 1<<20)
-	mathrand.New(mathrand.NewSource(0)).Read(want)
-
-	dataCh := make(chan []byte)
-	go func() {
-		_, err := c1.Write(want)
-		if err != nil {
-			t.Errorf("unexpected c1.Write error: %v", err)
-		}
-		if err := c1.Close(); err != nil {
-			t.Errorf("unexpected c1.Close error: %v", err)
-		}
-	}()
-
-	go func() {
-		buf := new(bytes.Buffer)
-		if _, err := io.Copy(buf, c2); err != nil {
-			t.Errorf("unexpected c2.Read error: %v", err)
-		}
-		if err := c2.Close(); err != nil {
-			t.Errorf("unexpected c2.Close error: %v", err)
-		}
-		dataCh <- buf.Bytes()
-	}()
-
-	if got := <-dataCh; !bytes.Equal(got, want) {
-		t.Error("transmitted data differs")
-		fmt.Printf("len(want): %d; len(got): %d\n", len(want), len(got))
-	}
-}
-
 // The ssh.Channel type underlying our Conn implementations has a quirk in which reads may fail
 // early after the peer has closed the transport: https://github.com/golang/go/issues/45912.
 // This is unlikely to present much of an issue in production use cases, but causes some of the
 // tests provided by the nettest package to fail. We work around this by coordinating closes.
 type coordinatedCloser struct {
-	Conn
+	almostConn
 
 	myReads, myWrites, peerReads       chan int
 	closing, peerClosing, readyToClose chan struct{}
@@ -155,7 +123,7 @@ type coordinatedCloser struct {
 	closeErr                           error
 }
 
-func coordinateClose(c1, c2 Conn) (cc1, cc2 Conn, stop func()) {
+func coordinateClose(c1, c2 almostConn) (cc1, cc2 almostConn) {
 	var (
 		c1Reads, c1Writes    = make(chan int), make(chan int)
 		c2Reads, c2Writes    = make(chan int), make(chan int)
@@ -173,13 +141,18 @@ func coordinateClose(c1, c2 Conn) (cc1, cc2 Conn, stop func()) {
 	}
 	go _c1.watchPeerReads()
 	go _c2.watchPeerReads()
-	return _c1, _c2, func() { go _c1.Close(); _c2.Close() }
+	return _c1, _c2
 }
 
 func (cc coordinatedCloser) Read(b []byte) (n int, err error) {
-	n, err = cc.Conn.Read(b)
+	n, err = cc.almostConn.Read(b)
 	if n > 0 {
-		cc.myReads <- n
+		select {
+		case cc.myReads <- n:
+			return
+		case <-cc.readyToClose:
+			return n, net.ErrClosed
+		}
 	}
 	return
 }
@@ -191,9 +164,13 @@ func (cc coordinatedCloser) Write(b []byte) (n int, err error) {
 	case <-cc.closing:
 		return 0, net.ErrClosed
 	default:
-		n, err = cc.Conn.Write(b)
-		cc.myWrites <- n
-		return
+		n, err = cc.almostConn.Write(b)
+		select {
+		case cc.myWrites <- n:
+			return
+		case <-cc.readyToClose:
+			return n, net.ErrClosed
+		}
 	}
 }
 
@@ -229,7 +206,7 @@ func (cc coordinatedCloser) Close() error {
 	cc.closeOnce.Do(func() {
 		close(cc.closing)
 		<-cc.readyToClose
-		cc.closeErr = cc.Conn.Close()
+		cc.closeErr = cc.almostConn.Close()
 	})
 	return cc.closeErr
 }
