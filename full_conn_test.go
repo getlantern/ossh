@@ -47,31 +47,30 @@ func TestDeadline(t *testing.T) {
 	require.True(t, d.expired())
 }
 
-func TestFIFOExecutor(t *testing.T) {
+func TestFIFOScheduler(t *testing.T) {
 	t.Parallel()
+
+	// The time allowed for concurrent goroutines to get started and into the actual important bits.
+	// Empirically, this seems to take about 300 ns on a modern MacBook Pro.
+	const goroutineStartTime = 10 * time.Millisecond
 
 	var (
 		wg          = new(sync.WaitGroup)
-		fe          = newFIFOExecutor()
+		fs          = newFIFOScheduler()
 		ints        = []int{}
-		numRoutines = 10
+		numRoutines = 1000
 		closeOnce   = new(sync.Once)
 	)
-	defer closeOnce.Do(fe.close)
+	defer closeOnce.Do(fs.close)
 
-	// Routines sleep an increasing amount of time to ensure they get in line in the expected order.
-	sleep := func(routineNum int) { time.Sleep(10 * time.Duration(routineNum) * time.Millisecond) }
-
-	// Grab a spot in line and sleep longer than any other routine to ensure the line builds up.
-	go fe.do(func() { sleep(numRoutines + 1) })
+	// Grab a spot in line and sleep to ensure the line builds up.
+	fs.schedule(func() { time.Sleep(goroutineStartTime) })
 
 	for i := 0; i < numRoutines; i++ {
+		_i := i
 		wg.Add(1)
-		go func(_i int) {
-			sleep(_i)
-			fe.do(func() { ints = append(ints, _i) })
-			wg.Done()
-		}(i)
+		// fs.schedule(func() { ints = append(ints, _i); wg.Done() })
+		fs.schedule(func() { ints = append(ints, _i); wg.Done() })
 	}
 	wg.Wait()
 	for i := 0; i < numRoutines; i++ {
@@ -79,10 +78,10 @@ func TestFIFOExecutor(t *testing.T) {
 	}
 
 	// A closed executor should execute functions without blocking.
-	closeOnce.Do(fe.close)
-	executed := false
-	fe.do(func() { executed = true })
-	require.True(t, executed)
+	closeOnce.Do(fs.close)
+	executed := make(chan struct{})
+	fs.schedule(func() { close(executed) })
+	<-executed
 }
 
 func TestFullConn(t *testing.T) {

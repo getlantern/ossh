@@ -90,43 +90,69 @@ func (d *deadline) close() {
 	d.Unlock()
 }
 
-// Enforces first-in, first-out, single-threaded operations between concurrent goroutines.
-type fifoExecutor struct {
-	reqs   chan (<-chan struct{})
+// Enforces exclusive and first-in, first-out operations between concurrent goroutines.
+type fifoScheduler struct {
+	reqs   chan func()
 	closed chan struct{}
 }
 
-func newFIFOExecutor() fifoExecutor {
-	reqs := make(chan (<-chan struct{}))
-	closed := make(chan struct{})
-	go func() {
-		for {
-			select {
-			case req := <-reqs:
-				<-req
-			case <-closed:
-				return
-			}
-		}
-	}()
-	return fifoExecutor{reqs, closed}
+func newFIFOScheduler() fifoScheduler {
+	fs := fifoScheduler{
+		make(chan func()),
+		make(chan struct{}),
+	}
+	go fs.run()
+	return fs
 }
 
-// Calls the input function. Functions are invoked one-at-a-time in the order they are received. A
-// closed fifoExecutor executes functions immediately, with no ordering or concurrency guarantees.
-func (fe fifoExecutor) do(f func()) {
-	req := make(chan struct{})
-	select {
-	case fe.reqs <- req:
-	case <-fe.closed:
+func (fs fifoScheduler) run() {
+	// The first element of queue is the currently executing function.
+	// The 'bell' is rung when we are ready to execute the next function.
+	queue := []func(){}
+	bell := make(chan struct{}, 1)
+
+	execAsync := func(f func()) {
+		f()
+		bell <- struct{}{}
 	}
-	f()
-	close(req)
+
+	for {
+		select {
+		case req := <-fs.reqs:
+			queue = append(queue, req)
+			if len(queue) == 1 {
+				// No currently executing function.
+				execAsync(req)
+			}
+
+		case <-bell:
+			if len(queue) <= 1 {
+				// The only remaining function just finished. Deregister and wait for more.
+				queue = []func(){}
+				continue
+			}
+			execAsync(queue[1])
+			queue = queue[1:]
+
+		case <-fs.closed:
+			return
+		}
+	}
+}
+
+// Schedules the input function. Functions are invoked one-at-a-time in the order they are received.
+// A closed fifoScheduler schedules f with no ordering or concurrency guarantees.
+func (fs fifoScheduler) schedule(f func()) {
+	select {
+	case fs.reqs <- f:
+	case <-fs.closed:
+		go f()
+	}
 }
 
 // Should only be called once.
-func (fe fifoExecutor) close() {
-	close(fe.closed)
+func (fs fifoScheduler) close() {
+	close(fs.closed)
 }
 
 // fullConn adds concurrency support and deadline handling to an almostConn. See the almostConn type
@@ -155,8 +181,8 @@ type fullConn struct {
 	// TODO: is this still necessary?
 	writeLock sync.Mutex
 
-	// Ensures FIFO, single-threaded access to wrapped.Write.
-	writeExecutor fifoExecutor
+	// Ensures exclusive, FIFO access to wrapped.Write.
+	writeScheduler fifoScheduler
 
 	// TODO: can we abstract the handshake and close fields?
 
@@ -180,7 +206,7 @@ func newFullConn(conn almostConn) *fullConn {
 		wrapped:              conn,
 		readDeadline:         newDeadline(closed),
 		writeDeadline:        newDeadline(closed),
-		writeExecutor:        newFIFOExecutor(),
+		writeScheduler:       newFIFOScheduler(),
 		closed:               closed,
 		handshakeOrCloseSema: make(chan struct{}, 1),
 	}
@@ -273,16 +299,16 @@ func (drw *fullConn) Write(b []byte) (n int, err error) {
 	bCopy := make([]byte, len(b))
 	copy(bCopy, b)
 	writeResultC := make(chan ioResult, 1)
-	go func() {
+	drw.writeScheduler.schedule(func() {
 		n, err := 0, drw.Handshake()
 		if err == nil {
-			drw.writeExecutor.do(func() { n, err = drw.wrapped.Write(bCopy) })
+			n, err = drw.wrapped.Write(bCopy)
 		}
 		select {
 		case writeResultC <- ioResult{n, err}:
 		case <-drw.closed:
 		}
-	}()
+	})
 
 	defer drw.writeDeadline.flushRoutines()
 	for {
@@ -325,7 +351,7 @@ func (drw *fullConn) Handshake() error {
 func (drw *fullConn) Close() error {
 	drw.closeOnce.Do(func() {
 		close(drw.closed)
-		drw.writeExecutor.close()
+		drw.writeScheduler.close()
 		drw.readDeadline.close()
 		drw.writeDeadline.close()
 		select {

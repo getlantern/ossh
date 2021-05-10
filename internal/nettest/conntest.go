@@ -433,14 +433,6 @@ func resyncConn(t *testing.T, c net.Conn) {
 	t.Helper()
 	c.SetDeadline(neverTimeout)
 
-	// == tweak ==
-	// An ossh.Conn cannot guarantee that Writes will actually cancel (see the godoc). To achieve
-	// pseudo-cancellation, the transport Write happens in a separate goroutine. It is possible for
-	// transport Write calls to be scheduled after resyncConn returns, causing future tests to fail
-	// or hang. Introducing a brief sleep ensures these goroutines get their writes flushed.
-	time.Sleep(100 * time.Millisecond)
-	// == end tweak ==
-
 	errCh := make(chan error)
 	go func() {
 		_, err := c.Write([]byte{0xff})
