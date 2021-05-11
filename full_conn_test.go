@@ -135,6 +135,7 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		require.NoError(t, c1.SetDeadline(noDeadline))
 		go func() { errC <- c2.(handshaker).Handshake() }()
 		require.NoError(t, c1.(handshaker).Handshake())
+		require.NoError(t, <-errC)
 	})
 	t.Run("TimeoutDuringHandshake", func(t *testing.T) {
 		t.Parallel()
@@ -157,6 +158,7 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		require.NoError(t, c1.SetDeadline(noDeadline))
 		go func() { errC <- c2.(handshaker).Handshake() }()
 		require.NoError(t, c1.(handshaker).Handshake())
+		require.NoError(t, <-errC)
 	})
 	t.Run("AddrPreHandshake", func(t *testing.T) {
 		t.Parallel()
