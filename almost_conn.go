@@ -79,8 +79,6 @@ func (s *funcStack) clear() {
 	*s = []func(){}
 }
 
-// TODO: the discard routines launched in Handshake functions might be leaked?
-
 // The clientConn and serverConn types below use obfuscator.ObfuscatedSSHConn as the underlying
 // transport. This connection does not define behavior for concurrent calls to one of Read or Write:
 //
