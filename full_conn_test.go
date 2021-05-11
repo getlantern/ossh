@@ -179,6 +179,49 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		go func() { errC <- c2.(handshaker).Handshake() }()
 		require.NoError(t, c1.(handshaker).Handshake())
 	})
+	t.Run("AddrPreHandshake", func(t *testing.T) {
+		c1, c2, stop, err := makeFullConnPipe()
+		require.NoError(t, err)
+		defer stop()
+
+		require.NotNil(t, c1.LocalAddr())
+		require.NotNil(t, c1.RemoteAddr())
+		require.NotNil(t, c2.LocalAddr())
+		require.NotNil(t, c2.RemoteAddr())
+	})
+	t.Run("AddrDuringHandshake", func(t *testing.T) {
+		c1, c2, stop, err := makeFullConnPipe()
+		require.NoError(t, err)
+		defer stop()
+
+		errC := make(chan error)
+		go func() { errC <- c1.(handshaker).Handshake() }()
+		time.Sleep(handshakeStartTime)
+
+		require.NotNil(t, c1.LocalAddr())
+		require.NotNil(t, c1.RemoteAddr())
+		require.NotNil(t, c2.LocalAddr())
+		require.NotNil(t, c2.RemoteAddr())
+
+		require.NoError(t, c2.(handshaker).Handshake())
+		require.NoError(t, <-errC)
+	})
+	t.Run("AddrPostHandshake", func(t *testing.T) {
+		c1, c2, stop, err := makeFullConnPipe()
+		require.NoError(t, err)
+		defer stop()
+
+		errC := make(chan error)
+		go func() { errC <- c1.(handshaker).Handshake() }()
+		time.Sleep(handshakeStartTime)
+		require.NoError(t, c2.(handshaker).Handshake())
+		require.NoError(t, <-errC)
+
+		require.NotNil(t, c1.LocalAddr())
+		require.NotNil(t, c1.RemoteAddr())
+		require.NotNil(t, c2.LocalAddr())
+		require.NotNil(t, c2.RemoteAddr())
+	})
 }
 
 // makeFullConnPipe implements nettest.MakePipe.

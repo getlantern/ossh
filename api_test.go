@@ -13,6 +13,8 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// TODO: try parallelizing tests where possible
+
 func makePipeTCP() (c1, c2 net.Conn, stop func(), err error) {
 	l, err := net.Listen("tcp", "")
 	if err != nil {
@@ -104,9 +106,11 @@ func makePipe() (c1, c2 net.Conn, stop func(), err error) {
 }
 
 func TestConn(t *testing.T) {
+	// Tests I/O, deadline support, net.Conn adherence, and data races.
 	nettest.TestConn(t, makePipe)
 
-	// TODO: use testHandshake?
+	// Tests calls to Close and SetDeadline before and during the handshake.
+	testHandshake(t, makePipe)
 }
 
 // The ssh.Channel type underlying our Conn implementations has a quirk in which reads may fail
