@@ -15,6 +15,52 @@ import (
 
 // TODO: try parallelizing tests where possible
 
+func TestConn(t *testing.T) {
+	// Tests I/O, deadline support, net.Conn adherence, and data races.
+	nettest.TestConn(t, makePipe)
+
+	// Tests calls to Close and SetDeadline before and during the handshake.
+	testHandshake(t, makePipe)
+}
+
+// makePipe implements nettest.MakePipe.
+func makePipe() (c1, c2 net.Conn, stop func(), err error) {
+	const keyword = "obfuscation-keyword"
+
+	_hostKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to generate host key (using RSA): %w", err)
+	}
+	hostKey, err := ssh.NewSignerFromKey(_hostKey)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to generate signer from RSA key: %w", err)
+	}
+
+	lCfg := ListenerConfig{
+		HostKey:            hostKey,
+		ObfuscationKeyword: keyword,
+	}
+	dCfg := DialerConfig{
+		ServerPublicKey:    hostKey.PublicKey(),
+		ObfuscationKeyword: keyword,
+	}
+
+	// It would be simpler to use net.Pipe to set up the peer connections (maybe with some internal
+	// buffering as in tlsmasq/internal/testutil.BufferedPipe). However, golang.org/x/crypto/ssh
+	// does not seem to like these piped connections. Instead, we set up a pair of TCP connections.
+
+	c1TCP, c2TCP, _, err := makePipeTCP()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to create TCP pipe: %w", err)
+	}
+	var c1Almost almostConn = &clientConn{c1TCP, dCfg, baseConn{nil, nil}}
+	var c2Almost almostConn = &serverConn{c2TCP, lCfg, baseConn{nil, nil}}
+	c1Almost, c2Almost = coordinateClose(c1Almost, c2Almost)
+	c1, c2 = newFullConn(c1Almost), newFullConn(c2Almost)
+	stop = func() { c1.Close(); c2.Close() }
+	return
+}
+
 func makePipeTCP() (c1, c2 net.Conn, stop func(), err error) {
 	l, err := net.Listen("tcp", "")
 	if err != nil {
@@ -65,52 +111,6 @@ func makePipeTCP() (c1, c2 net.Conn, stop func(), err error) {
 		}
 	}
 	return c1, c2, func() { c1.Close(); c2.Close() }, nil
-}
-
-// makePipe implements nettest.MakePipe.
-func makePipe() (c1, c2 net.Conn, stop func(), err error) {
-	const keyword = "obfuscation-keyword"
-
-	_hostKey, err := rsa.GenerateKey(rand.Reader, 1024)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to generate host key (using RSA): %w", err)
-	}
-	hostKey, err := ssh.NewSignerFromKey(_hostKey)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to generate signer from RSA key: %w", err)
-	}
-
-	lCfg := ListenerConfig{
-		HostKey:            hostKey,
-		ObfuscationKeyword: keyword,
-	}
-	dCfg := DialerConfig{
-		ServerPublicKey:    hostKey.PublicKey(),
-		ObfuscationKeyword: keyword,
-	}
-
-	// It would be simpler to use net.Pipe to set up the peer connections (maybe with some internal
-	// buffering as in tlsmasq/internal/testutil.BufferedPipe). However, golang.org/x/crypto/ssh
-	// does not seem to like these piped connections. Instead, we set up a pair of TCP connections.
-
-	c1TCP, c2TCP, _, err := makePipeTCP()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to create TCP pipe: %w", err)
-	}
-	var c1Almost almostConn = &clientConn{c1TCP, dCfg, baseConn{nil, nil}}
-	var c2Almost almostConn = &serverConn{c2TCP, lCfg, baseConn{nil, nil}}
-	c1Almost, c2Almost = coordinateClose(c1Almost, c2Almost)
-	c1, c2 = newFullConn(c1Almost), newFullConn(c2Almost)
-	stop = func() { c1.Close(); c2.Close() }
-	return
-}
-
-func TestConn(t *testing.T) {
-	// Tests I/O, deadline support, net.Conn adherence, and data races.
-	nettest.TestConn(t, makePipe)
-
-	// Tests calls to Close and SetDeadline before and during the handshake.
-	testHandshake(t, makePipe)
 }
 
 // The ssh.Channel type underlying our Conn implementations has a quirk in which reads may fail
