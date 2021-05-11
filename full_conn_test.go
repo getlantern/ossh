@@ -107,7 +107,7 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 	)
 
 	t.Run("CloseThenHandshake", func(t *testing.T) {
-		c1, c2, stop, err := makeFullConnPipe()
+		c1, c2, stop, err := mp()
 		require.NoError(t, err)
 		defer stop()
 
@@ -117,7 +117,7 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		require.ErrorIs(t, c2.(handshaker).Handshake(), net.ErrClosed)
 	})
 	t.Run("CloseOneThenHandshake", func(t *testing.T) {
-		c1, c2, stop, err := makeFullConnPipe()
+		c1, c2, stop, err := mp()
 		require.NoError(t, err)
 		defer stop()
 
@@ -126,7 +126,7 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		require.Error(t, c2.(handshaker).Handshake())
 	})
 	t.Run("CloseDuringHandshake", func(t *testing.T) {
-		c1, c2, stop, err := makeFullConnPipe()
+		c1, c2, stop, err := mp()
 		require.NoError(t, err)
 		defer stop()
 
@@ -142,7 +142,7 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		c2.(handshaker).Handshake()
 	})
 	t.Run("TimeoutThenHandshake", func(t *testing.T) {
-		c1, c2, stop, err := makeFullConnPipe()
+		c1, c2, stop, err := mp()
 		require.NoError(t, err)
 		defer stop()
 
@@ -159,7 +159,7 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		require.NoError(t, c1.(handshaker).Handshake())
 	})
 	t.Run("TimeoutDuringHandshake", func(t *testing.T) {
-		c1, c2, stop, err := makeFullConnPipe()
+		c1, c2, stop, err := mp()
 		require.NoError(t, err)
 		defer stop()
 
@@ -179,7 +179,7 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		require.NoError(t, c1.(handshaker).Handshake())
 	})
 	t.Run("AddrPreHandshake", func(t *testing.T) {
-		c1, c2, stop, err := makeFullConnPipe()
+		c1, c2, stop, err := mp()
 		require.NoError(t, err)
 		defer stop()
 
@@ -189,7 +189,7 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		require.NotNil(t, c2.RemoteAddr())
 	})
 	t.Run("AddrDuringHandshake", func(t *testing.T) {
-		c1, c2, stop, err := makeFullConnPipe()
+		c1, c2, stop, err := mp()
 		require.NoError(t, err)
 		defer stop()
 
@@ -206,7 +206,7 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		require.NoError(t, <-errC)
 	})
 	t.Run("AddrPostHandshake", func(t *testing.T) {
-		c1, c2, stop, err := makeFullConnPipe()
+		c1, c2, stop, err := mp()
 		require.NoError(t, err)
 		defer stop()
 
