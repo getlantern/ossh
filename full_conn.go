@@ -184,8 +184,6 @@ type fullConn struct {
 	// Ensures exclusive, FIFO access to wrapped.Write.
 	writeScheduler fifoScheduler
 
-	// TODO: can we abstract the handshake and close fields?
-
 	// Fields in this block are protected by shakeOnce.
 	shakeOnce sync.Once
 	shakeErr  error
