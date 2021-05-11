@@ -19,9 +19,7 @@ type almostConn interface {
 	// assumed to be short-lived. See fullConn.Write for more details.
 	io.ReadWriter
 
-	// Close must cause blocked Read and Write operations to unblock and return errors. This will
-	// only be called once.
-	// TODO: Is this actually required? If so, is this implemented?
+	// Close will only be called once. It is not necessary for Close to unblock Reads or Writes.
 	Close() error
 
 	// LocalAddr and RemoteAddr may be called at any time.
@@ -64,7 +62,23 @@ func (conn *baseConn) Close() error {
 	return chErr
 }
 
-// TODO: ensure resources are cleaned up in early exits of Handshake functions below
+// Intended for use in accumulating deferred calls, to be possibly cancelled later.
+type funcStack []func()
+
+func (s *funcStack) push(f func()) {
+	*s = append(*s, f)
+}
+
+func (s *funcStack) call() {
+	for i := len(*s) - 1; i >= 0; i-- {
+		(*s)[i]()
+	}
+}
+
+func (s *funcStack) clear() {
+	*s = []func(){}
+}
+
 // TODO: the discard routines launched in Handshake functions might be leaked?
 
 // The clientConn and serverConn types below use obfuscator.ObfuscatedSSHConn as the underlying
@@ -99,6 +113,9 @@ func (conn *clientConn) Handshake() error {
 		return errors.New("obfuscation keywork must be configured")
 	}
 
+	deferStack := funcStack{}
+	defer deferStack.call()
+
 	prngSeed, err := prng.NewSeed()
 	if err != nil {
 		return fmt.Errorf("failed to generate PRNG seed: %w", err)
@@ -114,6 +131,7 @@ func (conn *clientConn) Handshake() error {
 	if err != nil {
 		return fmt.Errorf("ossh handshake failed: %w", err)
 	}
+	deferStack.push(func() { osshConn.Close() })
 
 	sshCfg := ssh.ClientConfig{HostKeyCallback: ssh.FixedHostKey(conn.cfg.ServerPublicKey)}
 	sshConn, chans, reqs, err := ssh.NewClientConn(osshConn, "", &sshCfg)
@@ -122,6 +140,7 @@ func (conn *clientConn) Handshake() error {
 	}
 	go discardChannels(chans)
 	go ssh.DiscardRequests(reqs)
+	deferStack.push(func() { sshConn.Close() })
 
 	channel, reqs, err := sshConn.OpenChannel("channel0", []byte{})
 	if err != nil {
@@ -129,6 +148,7 @@ func (conn *clientConn) Handshake() error {
 	}
 	go ssh.DiscardRequests(reqs)
 
+	deferStack.clear()
 	conn.conn, conn.ch = sshConn, channel
 	return nil
 }
@@ -163,6 +183,9 @@ func (conn *serverConn) Handshake() error {
 		return errors.New("obfuscation keywork must be configured")
 	}
 
+	deferStack := funcStack{}
+	defer deferStack.call()
+
 	osshConn, err := obfuscator.NewServerObfuscatedSSHConn(
 		conn.transport,
 		conn.cfg.ObfuscationKeyword,
@@ -172,6 +195,7 @@ func (conn *serverConn) Handshake() error {
 	if err != nil {
 		return fmt.Errorf("ossh handshake failed: %w", err)
 	}
+	deferStack.push(func() { osshConn.Close() })
 
 	sshCfg := ssh.ServerConfig{NoClientAuth: true}
 	sshCfg.AddHostKey(conn.cfg.HostKey)
@@ -181,6 +205,7 @@ func (conn *serverConn) Handshake() error {
 		return fmt.Errorf("ssh handshake failed: %w", err)
 	}
 	go ssh.DiscardRequests(reqs)
+	deferStack.push(func() { sshConn.Close() })
 
 	channel, reqs, err := (<-chans).Accept()
 	if err != nil {
@@ -189,6 +214,7 @@ func (conn *serverConn) Handshake() error {
 	go discardChannels(chans)
 	go ssh.DiscardRequests(reqs)
 
+	deferStack.clear()
 	conn.conn, conn.ch = sshConn, channel
 	return nil
 }
