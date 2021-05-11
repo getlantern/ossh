@@ -111,7 +111,7 @@ func (fs fifoScheduler) run() {
 	queue := []func(){}
 	bell := make(chan struct{}, 1)
 
-	execAsync := func(f func()) {
+	exec := func(f func()) {
 		f()
 		bell <- struct{}{}
 	}
@@ -122,7 +122,7 @@ func (fs fifoScheduler) run() {
 			queue = append(queue, req)
 			if len(queue) == 1 {
 				// No currently executing function.
-				execAsync(req)
+				go exec(req)
 			}
 
 		case <-bell:
@@ -131,7 +131,7 @@ func (fs fifoScheduler) run() {
 				queue = []func(){}
 				continue
 			}
-			execAsync(queue[1])
+			go exec(queue[1])
 			queue = queue[1:]
 
 		case <-fs.closed:
