@@ -16,8 +16,6 @@ import (
 // TODO: try parallelizing tests where possible
 
 func TestConn(t *testing.T) {
-	t.Parallel()
-
 	// Tests I/O, deadline support, net.Conn adherence, and data races.
 	nettest.TestConn(t, makePipe)
 

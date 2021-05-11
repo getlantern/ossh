@@ -86,8 +86,6 @@ func TestFIFOScheduler(t *testing.T) {
 }
 
 func TestFullConn(t *testing.T) {
-	t.Parallel()
-
 	// Tests I/O, deadline support, net.Conn adherence, and data races.
 	nettest.TestConn(t, makeFullConnPipe)
 
@@ -101,8 +99,6 @@ type handshaker interface {
 
 // Assumes the net.Conn instances returned by mp implement the handshaker interface.
 func testHandshake(t *testing.T, mp nettest.MakePipe) {
-	t.Parallel()
-
 	// The time allowed for concurrent goroutines to get started and into the actual important bits.
 	// Empirically, this seems to take about 300 ns on a modern MacBook Pro.
 	const handshakeStartTime = 10 * time.Millisecond
