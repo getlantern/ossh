@@ -17,6 +17,8 @@ import (
 )
 
 func TestDeadline(t *testing.T) {
+	t.Parallel()
+
 	d := newDeadline(make(chan struct{}))
 	defer close(d.closed)
 
@@ -84,6 +86,8 @@ func TestFIFOScheduler(t *testing.T) {
 }
 
 func TestFullConn(t *testing.T) {
+	t.Parallel()
+
 	// Tests I/O, deadline support, net.Conn adherence, and data races.
 	nettest.TestConn(t, makeFullConnPipe)
 
@@ -97,6 +101,8 @@ type handshaker interface {
 
 // Assumes the net.Conn instances returned by mp implement the handshaker interface.
 func testHandshake(t *testing.T, mp nettest.MakePipe) {
+	t.Parallel()
+
 	// The time allowed for concurrent goroutines to get started and into the actual important bits.
 	// Empirically, this seems to take about 300 ns on a modern MacBook Pro.
 	const handshakeStartTime = 10 * time.Millisecond
@@ -107,6 +113,8 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 	)
 
 	t.Run("CloseThenHandshake", func(t *testing.T) {
+		t.Parallel()
+
 		c1, c2, stop, err := mp()
 		require.NoError(t, err)
 		defer stop()
@@ -117,6 +125,8 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		require.ErrorIs(t, c2.(handshaker).Handshake(), net.ErrClosed)
 	})
 	t.Run("CloseOneThenHandshake", func(t *testing.T) {
+		t.Parallel()
+
 		c1, c2, stop, err := mp()
 		require.NoError(t, err)
 		defer stop()
@@ -126,6 +136,8 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		require.Error(t, c2.(handshaker).Handshake())
 	})
 	t.Run("CloseDuringHandshake", func(t *testing.T) {
+		t.Parallel()
+
 		c1, c2, stop, err := mp()
 		require.NoError(t, err)
 		defer stop()
@@ -142,6 +154,8 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		c2.(handshaker).Handshake()
 	})
 	t.Run("TimeoutThenHandshake", func(t *testing.T) {
+		t.Parallel()
+
 		c1, c2, stop, err := mp()
 		require.NoError(t, err)
 		defer stop()
@@ -159,6 +173,8 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		require.NoError(t, c1.(handshaker).Handshake())
 	})
 	t.Run("TimeoutDuringHandshake", func(t *testing.T) {
+		t.Parallel()
+
 		c1, c2, stop, err := mp()
 		require.NoError(t, err)
 		defer stop()
@@ -179,6 +195,8 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		require.NoError(t, c1.(handshaker).Handshake())
 	})
 	t.Run("AddrPreHandshake", func(t *testing.T) {
+		t.Parallel()
+
 		c1, c2, stop, err := mp()
 		require.NoError(t, err)
 		defer stop()
@@ -189,6 +207,8 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		require.NotNil(t, c2.RemoteAddr())
 	})
 	t.Run("AddrDuringHandshake", func(t *testing.T) {
+		t.Parallel()
+
 		c1, c2, stop, err := mp()
 		require.NoError(t, err)
 		defer stop()
@@ -206,6 +226,8 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		require.NoError(t, <-errC)
 	})
 	t.Run("AddrPostHandshake", func(t *testing.T) {
+		t.Parallel()
+
 		c1, c2, stop, err := mp()
 		require.NoError(t, err)
 		defer stop()
