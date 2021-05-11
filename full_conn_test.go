@@ -3,7 +3,6 @@ package ossh
 import (
 	"errors"
 	"io"
-	mathrand "math/rand"
 	"net"
 	"os"
 	"strconv"
@@ -237,6 +236,8 @@ type fakeAddr string
 func (addr fakeAddr) Network() string { return "fake network" }
 func (addr fakeAddr) String() string  { return "fake address: " + string(addr) }
 
+var testAlmostConnNumber int64
+
 // testAlmostConn implements almostConn for testing fullConn's implementation of the net.Conn
 // interface. In particular, this type enforces the strictest requirements of almostConn (for
 // example, concurrent Reads and Writes will result in errors).
@@ -252,7 +253,7 @@ type testAlmostConn struct {
 
 	readSema, writeSema chan struct{}
 
-	// Optionally set this after initialization. Otherwise it is initialized to a random identifier.
+	// Optionally set this after initialization. Otherwise the connection is assigned an identifier.
 	name string
 }
 
@@ -262,6 +263,8 @@ func almostConnPipe() (almostConn, almostConn) {
 		rx2, tx2           = io.Pipe()
 		closed1, closed2   = make(chan struct{}), make(chan struct{})
 		shaking1, shaking2 = make(chan struct{}), make(chan struct{})
+		id1                = int(atomic.AddInt64(&testAlmostConnNumber, 1))
+		id2                = int(atomic.AddInt64(&testAlmostConnNumber, 1))
 	)
 	c1 := &testAlmostConn{
 		rx: rx1, tx: tx2,
@@ -272,7 +275,7 @@ func almostConnPipe() (almostConn, almostConn) {
 		handshakeDone:   make(chan struct{}),
 		readSema:        make(chan struct{}, 1),
 		writeSema:       make(chan struct{}, 1),
-		name:            "testAlmostConn" + strconv.Itoa(mathrand.Int()),
+		name:            "testAlmostConn" + strconv.Itoa(id1),
 	}
 	c2 := &testAlmostConn{
 		rx: rx2, tx: tx1,
@@ -283,7 +286,7 @@ func almostConnPipe() (almostConn, almostConn) {
 		handshakeDone:   make(chan struct{}),
 		readSema:        make(chan struct{}, 1),
 		writeSema:       make(chan struct{}, 1),
-		name:            "testAlmostConn" + strconv.Itoa(mathrand.Int()),
+		name:            "testAlmostConn" + strconv.Itoa(id2),
 	}
 	return c1, c2
 }
