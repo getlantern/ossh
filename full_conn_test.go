@@ -16,38 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDeadline(t *testing.T) {
-	t.Parallel()
-
-	d := newDeadline(make(chan struct{}))
-	defer close(d.closed)
-
-	d.set(time.Now())
-	<-d.maybeExpired
-	require.True(t, d.expired())
-
-	d.set(time.Now())
-	d.set(time.Now().Add(time.Hour))
-	<-d.maybeExpired
-	require.False(t, d.expired())
-	select {
-	case <-d.maybeExpired:
-		t.Fatal("unexpected notification")
-	default:
-	}
-
-	d.flushRoutines()
-	d.set(time.Now().Add(time.Hour))
-	d.set(time.Now())
-	<-d.maybeExpired
-	require.True(t, d.expired())
-
-	d.flushRoutines()
-	d.set(time.Now().Add(-1 * time.Hour))
-	<-d.maybeExpired
-	require.True(t, d.expired())
-}
-
 func TestFIFOScheduler(t *testing.T) {
 	t.Parallel()
 

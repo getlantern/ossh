@@ -12,82 +12,91 @@ type ioResult struct {
 	err error
 }
 
-// TODO: experiment with net.pipeDeadline: https://golang.org/src/net/pipe.go
-
-// deadline represents a point in time. Users of a deadline can listen to deadline.maybeExpired for
-// notifications on when the deadline may have expired. Values on deadline.maybeExpired may be
-// stale, so expiration status should always be confirmed with a call to deadline.expired()
-type deadline struct {
-	sync.Mutex
-
-	t                    time.Time
-	maybeExpired, closed chan struct{}
-}
-
-// newDeadline creates an unset deadline. Close the input channel to free up all deadline resources.
-func newDeadline(closed chan struct{}) *deadline {
-	dl := &deadline{
-		maybeExpired: make(chan struct{}),
-		closed:       closed,
-	}
-	return dl
-}
-
-// set the deadline. Points in the past are valid input and will immediately expire the deadline.
-// A zero value for t unsets the deadline. Calls to set create a new goroutine which blocks until
-// its value is read off d.maybeExpired. Call d.flushRoutines to free up these goroutines.
-func (d *deadline) set(t time.Time) {
-	d.Lock()
-	d.t = t
-	d.Unlock()
-	if t.IsZero() {
-		return
-	}
-	go func() {
-		select {
-		case <-time.After(time.Until(t)):
-		case <-d.closed:
-			return
-		}
-		select {
-		case d.maybeExpired <- struct{}{}:
-		case <-d.closed:
-			return
-		}
-	}()
-}
-
-func (d *deadline) expired() bool {
-	d.Lock()
-	defer d.Unlock()
-	if d.t.IsZero() {
+// Assumes nothing is ever sent on c.
+func isClosedChan(c <-chan struct{}) bool {
+	select {
+	case <-c:
+		return true
+	default:
 		return false
 	}
-	return time.Now().After(d.t)
 }
 
-// Clean up outstanding goroutines. Call this to free up resources when the program is no longer
-// actively waiting on d.maybeExpired. After a call to flushRoutines, d.expired should be consulted
-// before again waiting on d.maybeExpired.
-func (d *deadline) flushRoutines() {
-	for {
-		select {
-		case <-d.maybeExpired:
-		default:
-			return
+// deadline is an abstraction for handling timeouts. This code is taken from the pipeDeadline type
+// defined in https://golang.org/src/net/pipe.go.
+type deadline struct {
+	mu     sync.Mutex // Guards timer and cancel
+	timer  *time.Timer
+	cancel chan struct{} // Must be non-nil
+}
+
+func newDeadline() deadline {
+	return deadline{cancel: make(chan struct{})}
+}
+
+// set sets the point in time when the deadline will time out.
+// A timeout event is signaled by closing the channel returned by waiter.
+// Once a timeout has occurred, the deadline can be refreshed by specifying a
+// t value in the future.
+//
+// A zero value for t prevents timeout.
+func (d *deadline) set(t time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.timer != nil && !d.timer.Stop() {
+		<-d.cancel // Wait for the timer callback to finish and close cancel
+	}
+	d.timer = nil
+
+	// Time is zero, then there is no deadline.
+	closed := isClosedChan(d.cancel)
+	if t.IsZero() {
+		if closed {
+			d.cancel = make(chan struct{})
 		}
+		return
+	}
+
+	// Time in the future, setup a timer to cancel in the future.
+	if dur := time.Until(t); dur > 0 {
+		if closed {
+			d.cancel = make(chan struct{})
+		}
+		d.timer = time.AfterFunc(dur, func() {
+			close(d.cancel)
+		})
+		return
+	}
+
+	// Time in the past, so close immediately.
+	if !closed {
+		close(d.cancel)
 	}
 }
 
+// wait returns a channel that is closed when the deadline is exceeded.
+func (d *deadline) wait() chan struct{} {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.cancel
+}
+
+// This function was added by us; it was not ported from https://golang.org/src/net/pipe.go.
+func (d *deadline) expired() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return isClosedChan(d.cancel)
+}
+
+// close the deadline. Note that this does not close the channel returned by wait.
+// This function was added by us; it was not ported from https://golang.org/src/net/pipe.go.
 func (d *deadline) close() {
-	d.Lock()
-	select {
-	case <-d.closed:
-	default:
-		close(d.closed)
-		d.flushRoutines()
+	d.mu.Lock()
+	if d.timer != nil {
+		d.timer.Stop()
 	}
-	d.Unlock()
+	d.mu.Unlock()
 }
 
 // Enforces exclusive and first-in, first-out operations between concurrent goroutines.
@@ -175,11 +184,8 @@ type fullConn struct {
 	readResults chan ioResult
 	readLock    sync.Mutex
 
-	readDeadline, writeDeadline *deadline
-
-	// writeLock protects access to the Write method.
-	// TODO: is this still necessary?
-	writeLock sync.Mutex
+	// readDeadline, writeDeadline *deadline
+	readDeadline, writeDeadline deadline
 
 	// Ensures exclusive, FIFO access to wrapped.Write.
 	writeScheduler fifoScheduler
@@ -199,13 +205,12 @@ type fullConn struct {
 }
 
 func newFullConn(conn almostConn) *fullConn {
-	closed := make(chan struct{})
 	return &fullConn{
 		wrapped:              conn,
-		readDeadline:         newDeadline(closed),
-		writeDeadline:        newDeadline(closed),
+		readDeadline:         newDeadline(),
+		writeDeadline:        newDeadline(),
 		writeScheduler:       newFIFOScheduler(),
-		closed:               closed,
+		closed:               make(chan struct{}),
 		handshakeOrCloseSema: make(chan struct{}, 1),
 	}
 }
@@ -254,7 +259,6 @@ func (drw *fullConn) Read(b []byte) (n int, err error) {
 	}
 
 	// We know now that a read is active. Wait for the result.
-	defer drw.readDeadline.flushRoutines()
 	for {
 		select {
 		case res := <-drw.readResults:
@@ -266,10 +270,8 @@ func (drw *fullConn) Read(b []byte) (n int, err error) {
 			}
 			drw.readResults = nil
 			return
-		case <-drw.readDeadline.maybeExpired:
-			if drw.readDeadline.expired() {
-				return 0, os.ErrDeadlineExceeded
-			}
+		case <-drw.readDeadline.wait():
+			return 0, os.ErrDeadlineExceeded
 		case <-drw.closed:
 			return 0, net.ErrClosed
 		}
@@ -282,9 +284,6 @@ func (drw *fullConn) Read(b []byte) (n int, err error) {
 // this way, writes are more like fire-and-forget calls. In practice, this is unlikely to be an
 // issue as the underlying connection is unlikely to block for long on a write.
 func (drw *fullConn) Write(b []byte) (n int, err error) {
-	drw.writeLock.Lock()
-	defer drw.writeLock.Unlock()
-
 	if drw.isClosed() {
 		return 0, net.ErrClosed
 	}
@@ -308,15 +307,12 @@ func (drw *fullConn) Write(b []byte) (n int, err error) {
 		}
 	})
 
-	defer drw.writeDeadline.flushRoutines()
 	for {
 		select {
 		case res := <-writeResultC:
 			return res.n, res.err
-		case <-drw.writeDeadline.maybeExpired:
-			if drw.writeDeadline.expired() {
-				return 0, os.ErrDeadlineExceeded
-			}
+		case <-drw.writeDeadline.wait():
+			return 0, os.ErrDeadlineExceeded
 		case <-drw.closed:
 			return 0, net.ErrClosed
 		}
