@@ -46,7 +46,6 @@ type connTester func(t *testing.T, c1, c2 net.Conn)
 
 func timeoutWrapper(t *testing.T, mp MakePipe, f connTester) {
 	t.Helper()
-	t.Parallel()
 	c1, c2, stop, err := mp()
 	if err != nil {
 		t.Fatalf("unable to make pipe: %v", err)
