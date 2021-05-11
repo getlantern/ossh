@@ -29,6 +29,8 @@ type MakePipe func() (c1, c2 net.Conn, stop func(), err error)
 // run multiple times. For maximal effectiveness, run the tests under the
 // race detector.
 func TestConn(t *testing.T, mp MakePipe) {
+	t.Parallel()
+
 	t.Run("BasicIO", func(t *testing.T) { timeoutWrapper(t, mp, testBasicIO) })
 	t.Run("PingPong", func(t *testing.T) { timeoutWrapper(t, mp, testPingPong) })
 	t.Run("RacyRead", func(t *testing.T) { timeoutWrapper(t, mp, testRacyRead) })
@@ -46,6 +48,7 @@ type connTester func(t *testing.T, c1, c2 net.Conn)
 
 func timeoutWrapper(t *testing.T, mp MakePipe, f connTester) {
 	t.Helper()
+	t.Parallel()
 	c1, c2, stop, err := mp()
 	if err != nil {
 		t.Fatalf("unable to make pipe: %v", err)
