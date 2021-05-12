@@ -38,7 +38,6 @@ func TestFIFOScheduler(t *testing.T) {
 	for i := 0; i < numRoutines; i++ {
 		_i := i
 		wg.Add(1)
-		// fs.schedule(func() { ints = append(ints, _i); wg.Done() })
 		fs.schedule(func() { ints = append(ints, _i); wg.Done() })
 	}
 	wg.Wait()
