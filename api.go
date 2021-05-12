@@ -14,6 +14,28 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+/*
+ Code Structure
+
+ The output of this package is API used to set up network connections which communicate over
+ obfuscated SSH (OSSH). This is achieved using Psiphon's OSSH implementation, wrapped with Go's
+ SSH implementation.
+
+ Across the Lantern codebase (specifically in the Flashlight client and http-proxy-lantern server),
+ it is expected that pluggable transports provide net.Conn implementations. However, Go's SSH
+ library does not offer any such implementations. Thus the main objective for this package is to
+ bridge that gap by providing a net.Conn implementation on top of the offerings of the SSH package.
+
+ To achieve this, we define an interface representing what the SSH package *does* offer. We call
+ this an 'almostConn' as it is almost a net.Conn. Our almostConn implementations define everything
+ specific to O/SSH - how connections are set up, basic I/O, closing of resources, etc.
+
+ We wrap almostConn implementations in what we call a 'fullConn'. This type fully implements the
+ net.Conn interface by adding concurrency-safety, deadline support, and more. The fullConn type has
+ no concern for anything O/SSH; it is purely concerned with turning an almostConn into a net.Conn.
+
+*/
+
 // DialerConfig specifies configuration for dialing.
 type DialerConfig struct {
 	// ServerPublicKey must be set.
@@ -46,30 +68,23 @@ func (cfg ListenerConfig) logger() func(string, error, common.LogFields) {
 	}
 }
 
-// Dialer is the interface implemented by ossh dialers. Note that the methods return an ossh Conn,
-// not a net.Conn.
+// Dialer is the interface implemented by network dialer.s
 type Dialer interface {
-	Dial(network, address string) (Conn, error)
-	DialContext(ctx context.Context, network, address string) (Conn, error)
-}
-
-// NetDialer is the interface implemented by most network dialers.
-type NetDialer interface {
 	Dial(network, address string) (net.Conn, error)
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
 }
 
 type dialer struct {
-	NetDialer
+	Dialer
 	DialerConfig
 }
 
-func (d dialer) Dial(network, address string) (Conn, error) {
+func (d dialer) Dial(network, address string) (net.Conn, error) {
 	return d.DialContext(context.Background(), network, address)
 }
 
-func (d dialer) DialContext(ctx context.Context, network, address string) (Conn, error) {
-	transport, err := d.NetDialer.DialContext(ctx, network, address)
+func (d dialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	transport, err := d.Dialer.DialContext(ctx, network, address)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial TCP: %w", err)
 	}
@@ -77,16 +92,8 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (Conn,
 }
 
 // WrapDialer wraps a network dialer, returning an ossh dialer.
-func WrapDialer(d NetDialer, cfg DialerConfig) Dialer {
+func WrapDialer(d Dialer, cfg DialerConfig) Dialer {
 	return dialer{d, cfg}
-}
-
-// Listener is the interface implemented by ossh listeners. Note that the Accept method returns an
-// ossh Conn, not a net.Conn.
-type Listener interface {
-	Accept() (Conn, error)
-	Addr() net.Addr
-	Close() error
 }
 
 type listener struct {
@@ -94,7 +101,7 @@ type listener struct {
 	ListenerConfig
 }
 
-func (l listener) Accept() (Conn, error) {
+func (l listener) Accept() (net.Conn, error) {
 	transport, err := l.Listener.Accept()
 	if err != nil {
 		return nil, err
@@ -103,11 +110,13 @@ func (l listener) Accept() (Conn, error) {
 }
 
 // WrapListener wraps a network listener, returning an ossh listener.
-func WrapListener(l net.Listener, cfg ListenerConfig) Listener {
+func WrapListener(l net.Listener, cfg ListenerConfig) net.Listener {
 	return listener{l, cfg}
 }
 
-// Conn is a network connection between two peers over ossh.
+// Conn is a network connection between two peers communicating via OSSH. Connections returned by
+// listeners and dialers in this package will implement this interface. However, most users of this
+// package can ignore this type.
 //
 // There is one minor difference between an ossh Conn and a net.Conn. A net.Conn allows for
 // cancellation of I/O operations via the Close or Set*Deadline methods. Because an ossh Conn relies
@@ -119,7 +128,7 @@ func WrapListener(l net.Listener, cfg ListenerConfig) Listener {
 type Conn interface {
 	net.Conn
 
-	// Handshake executes an ossh handshake with the peer. Most users of this package need not call
+	// Handshake initiates the connection with the peer. Most users of this package need not call
 	// this function directly; the first Read or Write will trigger a handshake if needed.
 	//
 	// The Set*Deadline functions do not apply to this function. If the handshake is initiated by
