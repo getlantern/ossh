@@ -7,6 +7,7 @@ require (
 	github.com/Psiphon-Labs/psiphon-tunnel-core v2.0.14+incompatible
 	github.com/aristanetworks/goarista v0.0.0-20210319202508-5b0c587084ea // indirect
 	github.com/cognusion/go-cache-lru v0.0.0-20170419142635-f73e2280ecea // indirect
+	github.com/getlantern/nettest v0.0.0-20210512000304-8654b650c57d
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/juju/ratelimit v1.0.1 // indirect
 	github.com/miekg/dns v1.1.41 // indirect

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/getlantern/ossh/internal/nettest"
+	"github.com/getlantern/nettest"
 
 	"github.com/stretchr/testify/require"
 )

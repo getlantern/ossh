@@ -9,7 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/getlantern/ossh/internal/nettest"
+	"github.com/getlantern/nettest"
+
 	"golang.org/x/crypto/ssh"
 )
 
