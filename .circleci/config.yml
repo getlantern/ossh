@@ -15,8 +15,7 @@ jobs:
           name: Test
           # We have a lot of concurrency and synchronization in this library. Test with -race and
           # -count=1000 to expose any timing related bugs.
-          # Using -count=100 to iterate faster TODO: bump
-          command: go test -race -count=100 -v -timeout 1h
+          command: go test -race -count=1000 -v -timeout 1h
 
 workflows:
     version: 2
