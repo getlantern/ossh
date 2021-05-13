@@ -125,9 +125,13 @@ func (fs fifoScheduler) run() {
 		bell <- struct{}{}
 	}
 
+	// n.b. Outstanding functions in the queue are dropped and never executed when fs is closed.
 	for {
 		select {
 		case req := <-fs.reqs:
+			if fs.isClosed() {
+				return
+			}
 			queue = append(queue, req)
 			if len(queue) == 1 {
 				// No currently executing function.
@@ -135,6 +139,9 @@ func (fs fifoScheduler) run() {
 			}
 
 		case <-bell:
+			if fs.isClosed() {
+				return
+			}
 			if len(queue) <= 1 {
 				// The only remaining function just finished. Deregister and wait for more.
 				queue = []func(){}
@@ -150,18 +157,21 @@ func (fs fifoScheduler) run() {
 }
 
 // Schedules the input function. Functions are invoked one-at-a-time in the order they are received.
-// A closed fifoScheduler schedules f with no ordering or concurrency guarantees.
+// If fs is already closed or closed before f is called, then f will never be invoked.
 func (fs fifoScheduler) schedule(f func()) {
 	select {
 	case fs.reqs <- f:
 	case <-fs.closed:
-		go f()
 	}
 }
 
-// Should only be called once.
+// Should only be called once. Pending functions (passed to schedule) will never be invoked.
 func (fs fifoScheduler) close() {
 	close(fs.closed)
+}
+
+func (fs fifoScheduler) isClosed() bool {
+	return isClosedChan(fs.closed)
 }
 
 // fullConn adds concurrency support and deadline handling to an almostConn. See the almostConn type
@@ -374,10 +384,5 @@ func (drw *fullConn) SetDeadline(t time.Time) error {
 }
 
 func (drw *fullConn) isClosed() bool {
-	select {
-	case <-drw.closed:
-		return true
-	default:
-		return false
-	}
+	return isClosedChan(drw.closed)
 }

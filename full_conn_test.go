@@ -17,39 +17,69 @@ import (
 )
 
 func TestFIFOScheduler(t *testing.T) {
-	t.Parallel()
+	t.Run("ExecutionOrder", func(t *testing.T) {
+		t.Parallel()
 
-	// The time allowed for concurrent goroutines to get started and into the actual important bits.
-	// Empirically, this seems to take about 300 ns on a modern MacBook Pro.
-	const goroutineStartTime = 10 * time.Millisecond
+		var (
+			wg                       = new(sync.WaitGroup)
+			fs                       = newFIFOScheduler()
+			ints                     = []int{}
+			numRoutines              = 1000
+			closeOnce                = new(sync.Once)
+			holdingSpot, releaseSpot = make(chan struct{}), make(chan struct{})
+		)
+		defer closeOnce.Do(fs.close)
 
-	var (
-		wg          = new(sync.WaitGroup)
-		fs          = newFIFOScheduler()
-		ints        = []int{}
-		numRoutines = 1000
-		closeOnce   = new(sync.Once)
-	)
-	defer closeOnce.Do(fs.close)
+		// Grab the first spot in line and wait to ensure the line builds up.
+		fs.schedule(func() { close(holdingSpot); <-releaseSpot })
 
-	// Grab a spot in line and sleep to ensure the line builds up.
-	fs.schedule(func() { time.Sleep(goroutineStartTime) })
+		for i := 0; i < numRoutines; i++ {
+			_i := i
+			wg.Add(1)
+			fs.schedule(func() { ints = append(ints, _i); wg.Done() })
+		}
 
-	for i := 0; i < numRoutines; i++ {
-		_i := i
-		wg.Add(1)
-		fs.schedule(func() { ints = append(ints, _i); wg.Done() })
-	}
-	wg.Wait()
-	for i := 0; i < numRoutines; i++ {
-		require.Equal(t, i, ints[i])
-	}
+		require.True(t, isClosedChan(holdingSpot))
+		require.Zero(t, len(ints), "schedulued routines should not have started")
+		close(releaseSpot)
+		wg.Wait()
 
-	// A closed executor should execute functions without blocking.
-	closeOnce.Do(fs.close)
-	executed := make(chan struct{})
-	fs.schedule(func() { close(executed) })
-	<-executed
+		for i := 0; i < numRoutines; i++ {
+			require.Equal(t, i, ints[i])
+		}
+	})
+
+	t.Run("CloseBehavior", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			fs                       = newFIFOScheduler()
+			numRoutines              = 1000
+			holdingSpot, releaseSpot = make(chan struct{}), make(chan struct{})
+		)
+
+		// Grab the first spot in line and wait to ensure the line builds up.
+		fs.schedule(func() { close(holdingSpot); <-releaseSpot })
+
+		executions := 0
+		for i := 0; i < numRoutines; i++ {
+			fs.schedule(func() { executions++ })
+		}
+
+		require.True(t, isClosedChan(holdingSpot))
+		require.Zero(t, executions, "schedulued routines should not have started")
+
+		fs.close()
+		close(releaseSpot)
+
+		// Schedule another, just for kicks
+		fs.schedule(func() { executions++ })
+
+		// Emipirically, at least one of the scheduled functions would execute in about 300 ns on a
+		// modern MacBook Pro.
+		time.Sleep(10 * time.Millisecond)
+		require.Zero(t, executions, "schedulued routines should not have started")
+	})
 }
 
 func TestFullConn(t *testing.T) {
