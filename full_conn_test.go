@@ -56,7 +56,7 @@ func TestFullConn(t *testing.T) {
 	// Tests I/O, deadline support, net.Conn adherence, and data races.
 	nettest.TestConn(t, makeFullConnPipe)
 
-	// Tests calls to Close and SetDeadline before and during the handshake.
+	// Tests calls made before and during the handshake.
 	testHandshake(t, makeFullConnPipe)
 }
 

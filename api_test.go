@@ -18,7 +18,7 @@ func TestConn(t *testing.T) {
 	// Tests I/O, deadline support, net.Conn adherence, and data races.
 	nettest.TestConn(t, makePipe)
 
-	// Tests calls to Close and SetDeadline before and during the handshake.
+	// Tests calls made before and during the handshake.
 	testHandshake(t, makePipe)
 }
 
@@ -44,9 +44,8 @@ func makePipe() (c1, c2 net.Conn, stop func(), err error) {
 		ObfuscationKeyword: keyword,
 	}
 
-	// It would be simpler to use net.Pipe to set up the peer connections (maybe with some internal
-	// buffering as in tlsmasq/internal/testutil.BufferedPipe). However, golang.org/x/crypto/ssh
-	// does not seem to like these piped connections. Instead, we set up a pair of TCP connections.
+	// It would be simpler to use net.Pipe to set up the peer transports. However, the ssh library
+	// does not like these piped connections: https://github.com/golang/go/issues/32990.
 
 	c1TCP, c2TCP, _, err := makePipeTCP()
 	if err != nil {
