@@ -184,7 +184,6 @@ type fullConn struct {
 	readResults chan ioResult
 	readLock    sync.Mutex
 
-	// readDeadline, writeDeadline *deadline
 	readDeadline, writeDeadline deadline
 
 	// Ensures exclusive, FIFO access to wrapped.Write.
@@ -230,7 +229,7 @@ func (drw *fullConn) Read(b []byte) (n int, err error) {
 		// Unconsumed bytes in the buffer.
 		n = copy(b, drw.buf[drw.pos:drw.n])
 		drw.pos += n
-		if drw.n == drw.pos {
+		if drw.pos == drw.n {
 			drw.pos, drw.n = 0, 0
 			err = drw.readErr
 			drw.readErr = nil
@@ -251,30 +250,25 @@ func (drw *fullConn) Read(b []byte) (n int, err error) {
 			}
 			// This routine does not hold the lock, but we know that drw.readResults will be valid
 			// until we send a value.
-			select {
-			case drw.readResults <- ioResult{n, err}:
-			case <-drw.closed:
-			}
+			drw.readResults <- ioResult{n, err}
 		}()
 	}
 
 	// We know now that a read is active. Wait for the result.
-	for {
-		select {
-		case res := <-drw.readResults:
-			n = copy(b, drw.buf[:res.n])
-			if n < res.n {
-				drw.pos, drw.n, drw.readErr = n, res.n, res.err
-			} else {
-				err = res.err
-			}
-			drw.readResults = nil
-			return
-		case <-drw.readDeadline.wait():
-			return 0, os.ErrDeadlineExceeded
-		case <-drw.closed:
-			return 0, net.ErrClosed
+	select {
+	case res := <-drw.readResults:
+		n = copy(b, drw.buf[:res.n])
+		if n < res.n {
+			drw.pos, drw.n, drw.readErr = n, res.n, res.err
+		} else {
+			err = res.err
 		}
+		drw.readResults = nil
+		return
+	case <-drw.readDeadline.wait():
+		return 0, os.ErrDeadlineExceeded
+	case <-drw.closed:
+		return 0, net.ErrClosed
 	}
 }
 
@@ -301,21 +295,16 @@ func (drw *fullConn) Write(b []byte) (n int, err error) {
 		if err == nil {
 			n, err = drw.wrapped.Write(bCopy)
 		}
-		select {
-		case writeResultC <- ioResult{n, err}:
-		case <-drw.closed:
-		}
+		writeResultC <- ioResult{n, err}
 	})
 
-	for {
-		select {
-		case res := <-writeResultC:
-			return res.n, res.err
-		case <-drw.writeDeadline.wait():
-			return 0, os.ErrDeadlineExceeded
-		case <-drw.closed:
-			return 0, net.ErrClosed
-		}
+	select {
+	case res := <-writeResultC:
+		return res.n, res.err
+	case <-drw.writeDeadline.wait():
+		return 0, os.ErrDeadlineExceeded
+	case <-drw.closed:
+		return 0, net.ErrClosed
 	}
 }
 

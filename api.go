@@ -68,7 +68,7 @@ func (cfg ListenerConfig) logger() func(string, error, common.LogFields) {
 	}
 }
 
-// Dialer is the interface implemented by network dialer.s
+// Dialer is the interface implemented by network dialers.
 type Dialer interface {
 	Dial(network, address string) (net.Conn, error)
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
