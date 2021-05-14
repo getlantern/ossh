@@ -101,14 +101,16 @@ func (d *deadline) close() {
 
 // Enforces exclusive and first-in, first-out operations between concurrent goroutines.
 type fifoScheduler struct {
-	reqs   chan func()
-	closed chan struct{}
+	reqs      chan func()
+	closed    chan struct{}
+	closeOnce *sync.Once
 }
 
 func newFIFOScheduler() fifoScheduler {
 	fs := fifoScheduler{
 		make(chan func()),
 		make(chan struct{}),
+		new(sync.Once),
 	}
 	go fs.run()
 	return fs
@@ -165,9 +167,9 @@ func (fs fifoScheduler) schedule(f func()) {
 	}
 }
 
-// Should only be called once. Pending functions (passed to schedule) will never be invoked.
+// Pending functions (passed to schedule) will never be invoked after this call.
 func (fs fifoScheduler) close() {
-	close(fs.closed)
+	fs.closeOnce.Do(func() { close(fs.closed) })
 }
 
 func (fs fifoScheduler) isClosed() bool {
