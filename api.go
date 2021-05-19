@@ -96,6 +96,20 @@ func WrapDialer(d Dialer, cfg DialerConfig) Dialer {
 	return dialer{d, cfg}
 }
 
+// Dial connects using the provided config. The handshake will not be initiated.
+func Dial(network, address string, cfg DialerConfig) (Conn, error) {
+	return DialContext(context.Background(), network, address, cfg)
+}
+
+// DialContext connects using the provided config and context. The handshake will not be initiated.
+func DialContext(ctx context.Context, network, address string, cfg DialerConfig) (Conn, error) {
+	conn, err := WrapDialer(&net.Dialer{}, cfg).DialContext(ctx, network, address)
+	if err != nil {
+		return conn.(Conn), nil
+	}
+	return nil, err
+}
+
 type listener struct {
 	net.Listener
 	ListenerConfig
@@ -112,6 +126,15 @@ func (l listener) Accept() (net.Conn, error) {
 // WrapListener wraps a network listener, returning an ossh listener.
 func WrapListener(l net.Listener, cfg ListenerConfig) net.Listener {
 	return listener{l, cfg}
+}
+
+// Listen for new connections using the provided config.
+func Listen(network, address string, cfg ListenerConfig) (net.Listener, error) {
+	l, err := net.Listen(network, address)
+	if err != nil {
+		return nil, err
+	}
+	return WrapListener(l, cfg), nil
 }
 
 // Conn is a network connection between two peers communicating via OSSH. Connections returned by
