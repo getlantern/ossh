@@ -355,16 +355,21 @@ func (conn *fullConn) Write(b []byte) (n int, err error) {
 		writeResultC <- ioResult{n, err}
 	}
 
-	for {
-		select {
-		case conn.writeRequests <- writeFunc:
-		case res := <-writeResultC:
-			return res.n, res.err
-		case <-conn.writeDeadline.wait():
-			return 0, os.ErrDeadlineExceeded
-		case <-conn.closed:
-			return 0, net.ErrClosed
-		}
+	select {
+	case conn.writeRequests <- writeFunc:
+	case <-conn.writeDeadline.wait():
+		return 0, os.ErrDeadlineExceeded
+	case <-conn.closed:
+		return 0, net.ErrClosed
+	}
+
+	select {
+	case res := <-writeResultC:
+		return res.n, res.err
+	case <-conn.writeDeadline.wait():
+		return 0, os.ErrDeadlineExceeded
+	case <-conn.closed:
+		return 0, net.ErrClosed
 	}
 }
 
