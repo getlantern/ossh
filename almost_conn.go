@@ -104,8 +104,8 @@ func (conn *clientConn) RemoteAddr() net.Addr { return conn.transport.RemoteAddr
 // Per the almostConn interface, we expect this to be called only once and we do not expect calls to
 // Read or Write unless this function is called and returns no error.
 func (conn *clientConn) Handshake() error {
-	deferStack := funcStack{}
-	defer deferStack.call()
+	cleanupOnFailure := funcStack{}
+	defer cleanupOnFailure.call()
 
 	prngSeed, err := prng.NewSeed()
 	if err != nil {
@@ -122,7 +122,7 @@ func (conn *clientConn) Handshake() error {
 	if err != nil {
 		return fmt.Errorf("ossh handshake failed: %w", err)
 	}
-	deferStack.push(func() { osshConn.Close() })
+	cleanupOnFailure.push(func() { osshConn.Close() })
 
 	sshCfg := ssh.ClientConfig{HostKeyCallback: ssh.FixedHostKey(conn.cfg.ServerPublicKey)}
 	sshConn, chans, reqs, err := ssh.NewClientConn(osshConn, "", &sshCfg)
@@ -131,7 +131,7 @@ func (conn *clientConn) Handshake() error {
 	}
 	go discardChannels(chans)
 	go ssh.DiscardRequests(reqs)
-	deferStack.push(func() { sshConn.Close() })
+	cleanupOnFailure.push(func() { sshConn.Close() })
 
 	channel, reqs, err := sshConn.OpenChannel("channel0", []byte{})
 	if err != nil {
@@ -139,7 +139,7 @@ func (conn *clientConn) Handshake() error {
 	}
 	go ssh.DiscardRequests(reqs)
 
-	deferStack.clear()
+	cleanupOnFailure.clear()
 	conn.conn, conn.ch = sshConn, channel
 	return nil
 }
@@ -167,8 +167,8 @@ func (conn *serverConn) RemoteAddr() net.Addr { return conn.transport.RemoteAddr
 // Per the almostConn interface, we expect this to be called only once and we do not expect calls to
 // Read or Write unless this function is called and returns no error.
 func (conn *serverConn) Handshake() error {
-	deferStack := funcStack{}
-	defer deferStack.call()
+	cleanupOnFailure := funcStack{}
+	defer cleanupOnFailure.call()
 
 	osshConn, err := obfuscator.NewServerObfuscatedSSHConn(
 		conn.transport,
@@ -179,7 +179,7 @@ func (conn *serverConn) Handshake() error {
 	if err != nil {
 		return fmt.Errorf("ossh handshake failed: %w", err)
 	}
-	deferStack.push(func() { osshConn.Close() })
+	cleanupOnFailure.push(func() { osshConn.Close() })
 
 	sshCfg := ssh.ServerConfig{NoClientAuth: true}
 	sshCfg.AddHostKey(conn.cfg.HostKey)
@@ -189,7 +189,7 @@ func (conn *serverConn) Handshake() error {
 		return fmt.Errorf("ssh handshake failed: %w", err)
 	}
 	go ssh.DiscardRequests(reqs)
-	deferStack.push(func() { sshConn.Close() })
+	cleanupOnFailure.push(func() { sshConn.Close() })
 
 	channel, reqs, err := (<-chans).Accept()
 	if err != nil {
@@ -198,7 +198,7 @@ func (conn *serverConn) Handshake() error {
 	go discardChannels(chans)
 	go ssh.DiscardRequests(reqs)
 
-	deferStack.clear()
+	cleanupOnFailure.clear()
 	conn.conn, conn.ch = sshConn, channel
 	return nil
 }

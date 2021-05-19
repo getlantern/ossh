@@ -227,59 +227,59 @@ func newFullConn(conn almostConn) *fullConn {
 }
 
 // Read implements net.Conn.Read.
-func (drw *fullConn) Read(b []byte) (n int, err error) {
-	drw.readLock.Lock()
-	defer drw.readLock.Unlock()
+func (conn *fullConn) Read(b []byte) (n int, err error) {
+	conn.readLock.Lock()
+	defer conn.readLock.Unlock()
 
-	if drw.isClosed() {
+	if conn.isClosed() {
 		return 0, net.ErrClosed
 	}
-	if drw.readDeadline.expired() {
+	if conn.readDeadline.expired() {
 		return 0, os.ErrDeadlineExceeded
 	}
-	if drw.n > 0 {
+	if conn.n > 0 {
 		// Unconsumed bytes in the buffer.
-		n = copy(b, drw.buf[drw.pos:drw.n])
-		drw.pos += n
-		if drw.pos == drw.n {
-			drw.pos, drw.n = 0, 0
-			err = drw.readErr
-			drw.readErr = nil
+		n = copy(b, conn.buf[conn.pos:conn.n])
+		conn.pos += n
+		if conn.pos == conn.n {
+			conn.pos, conn.n = 0, 0
+			err = conn.readErr
+			conn.readErr = nil
 		}
 		return
 	}
 
 	// If no read is active, start one in a new routine.
-	if drw.readResults == nil {
-		drw.readResults = make(chan ioResult, 1)
-		if len(drw.buf) < len(b) {
-			drw.buf = make([]byte, len(b))
+	if conn.readResults == nil {
+		conn.readResults = make(chan ioResult, 1)
+		if len(conn.buf) < len(b) {
+			conn.buf = make([]byte, len(b))
 		}
 		go func() {
-			n, err := 0, drw.Handshake()
+			n, err := 0, conn.Handshake()
 			if err == nil {
-				n, err = drw.wrapped.Read(drw.buf[:len(b)])
+				n, err = conn.wrapped.Read(conn.buf[:len(b)])
 			}
 			// This routine does not hold the lock, but we know that drw.readResults will be valid
 			// until we send a value.
-			drw.readResults <- ioResult{n, err}
+			conn.readResults <- ioResult{n, err}
 		}()
 	}
 
 	// We know now that a read is active. Wait for the result.
 	select {
-	case res := <-drw.readResults:
-		n = copy(b, drw.buf[:res.n])
+	case res := <-conn.readResults:
+		n = copy(b, conn.buf[:res.n])
 		if n < res.n {
-			drw.pos, drw.n, drw.readErr = n, res.n, res.err
+			conn.pos, conn.n, conn.readErr = n, res.n, res.err
 		} else {
 			err = res.err
 		}
-		drw.readResults = nil
+		conn.readResults = nil
 		return
-	case <-drw.readDeadline.wait():
+	case <-conn.readDeadline.wait():
 		return 0, os.ErrDeadlineExceeded
-	case <-drw.closed:
+	case <-conn.closed:
 		return 0, net.ErrClosed
 	}
 }
@@ -289,11 +289,11 @@ func (drw *fullConn) Read(b []byte) (n int, err error) {
 // Unlike Read, Write may return 0, os.ErrDeadlineExceeded, but still successfully occur later. In
 // this way, writes are more like fire-and-forget calls. In practice, this is unlikely to be an
 // issue as the underlying connection is unlikely to block for long on a write.
-func (drw *fullConn) Write(b []byte) (n int, err error) {
-	if drw.isClosed() {
+func (conn *fullConn) Write(b []byte) (n int, err error) {
+	if conn.isClosed() {
 		return 0, net.ErrClosed
 	}
-	if drw.writeDeadline.expired() {
+	if conn.writeDeadline.expired() {
 		return 0, os.ErrDeadlineExceeded
 	}
 
@@ -302,10 +302,10 @@ func (drw *fullConn) Write(b []byte) (n int, err error) {
 	bCopy := make([]byte, len(b))
 	copy(bCopy, b)
 	writeResultC := make(chan ioResult, 1)
-	drw.writeScheduler.schedule(func() {
-		n, err := 0, drw.Handshake()
+	conn.writeScheduler.schedule(func() {
+		n, err := 0, conn.Handshake()
 		if err == nil {
-			n, err = drw.wrapped.Write(bCopy)
+			n, err = conn.wrapped.Write(bCopy)
 		}
 		writeResultC <- ioResult{n, err}
 	})
@@ -313,78 +313,76 @@ func (drw *fullConn) Write(b []byte) (n int, err error) {
 	select {
 	case res := <-writeResultC:
 		return res.n, res.err
-	case <-drw.writeDeadline.wait():
+	case <-conn.writeDeadline.wait():
 		return 0, os.ErrDeadlineExceeded
-	case <-drw.closed:
+	case <-conn.closed:
 		return 0, net.ErrClosed
 	}
 }
 
 // Handshake initiates the connection if necessary. It is safe to call this function multiple times.
-func (drw *fullConn) Handshake() error {
-	drw.shakeOnce.Do(func() {
+func (conn *fullConn) Handshake() error {
+	conn.shakeOnce.Do(func() {
 		errC := make(chan error, 1)
 		go func() {
 			select {
-			case drw.handshakeOrCloseSema <- struct{}{}:
-				errC <- drw.wrapped.Handshake()
-				<-drw.handshakeOrCloseSema
+			case conn.handshakeOrCloseSema <- struct{}{}:
+				errC <- conn.wrapped.Handshake()
+				<-conn.handshakeOrCloseSema
 			default:
 				// The connection must be closing. Abandon handshake.
 			}
 		}()
 		select {
-		case drw.shakeErr = <-errC:
-		case <-drw.closed:
-			drw.shakeErr = net.ErrClosed
+		case conn.shakeErr = <-errC:
+		case <-conn.closed:
+			conn.shakeErr = net.ErrClosed
 		}
 	})
-	return drw.shakeErr
+	return conn.shakeErr
 }
 
 // Close implements net.Conn.Close. It is safe to call Close multiple times.
-func (drw *fullConn) Close() error {
-	drw.closeOnce.Do(func() {
-		close(drw.closed)
-		drw.writeScheduler.close()
-		drw.readDeadline.close()
-		drw.writeDeadline.close()
+func (conn *fullConn) Close() error {
+	conn.closeOnce.Do(func() {
+		close(conn.closed)
+		conn.writeScheduler.close()
+		conn.readDeadline.close()
+		conn.writeDeadline.close()
 		select {
-		case drw.handshakeOrCloseSema <- struct{}{}:
-			drw.closeErr = drw.wrapped.Close()
+		case conn.handshakeOrCloseSema <- struct{}{}:
+			conn.closeErr = conn.wrapped.Close()
 			// Retain the semaphore to prevent future handshakes.
 		default:
 			// Handshake ongoing. Launch a routine to wait and close. In this (likely rare) case, we
 			// fib about the connection being completely closed.
 			go func() {
-				drw.handshakeOrCloseSema <- struct{}{}
-				drw.wrapped.Close()
+				conn.handshakeOrCloseSema <- struct{}{}
+				conn.wrapped.Close()
 				// Retain the semaphore to prevent future handshakes.
 			}()
 		}
 	})
-	return drw.closeErr
+	return conn.closeErr
 }
 
 // LocalAddr implements net.Conn.LocalAddr.
-func (drw *fullConn) LocalAddr() net.Addr { return drw.wrapped.LocalAddr() }
+func (conn *fullConn) LocalAddr() net.Addr { return conn.wrapped.LocalAddr() }
 
 // RemoteAddr implements net.Conn.RemoteAddr.
-func (drw *fullConn) RemoteAddr() net.Addr { return drw.wrapped.RemoteAddr() }
+func (conn *fullConn) RemoteAddr() net.Addr { return conn.wrapped.RemoteAddr() }
 
 // SetReadDeadline implements net.Conn.SetReadDeadline.
-func (drw *fullConn) SetReadDeadline(t time.Time) error { drw.readDeadline.set(t); return nil }
+func (conn *fullConn) SetReadDeadline(t time.Time) error { conn.readDeadline.set(t); return nil }
 
 // SetWriteDeadline implements net.Conn.SetWriteDeadline.
-func (drw *fullConn) SetWriteDeadline(t time.Time) error { drw.writeDeadline.set(t); return nil }
+func (conn *fullConn) SetWriteDeadline(t time.Time) error { conn.writeDeadline.set(t); return nil }
 
 // SetDeadline implements net.Conn.SetDeadline.
-func (drw *fullConn) SetDeadline(t time.Time) error {
-	drw.readDeadline.set(t)
-	drw.writeDeadline.set(t)
+func (conn *fullConn) SetDeadline(t time.Time) error {
+	conn.readDeadline.set(t)
+	conn.writeDeadline.set(t)
 	return nil
 }
 
-func (drw *fullConn) isClosed() bool {
-	return isClosedChan(drw.closed)
-}
+func (conn *fullConn) isClosed() bool { return isClosedChan(conn.closed) }
