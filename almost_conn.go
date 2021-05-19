@@ -1,10 +1,11 @@
 package ossh
 
 import (
-	"errors"
-	"fmt"
+	goerrors "errors"
 	"io"
 	"net"
+
+	"github.com/getlantern/errors"
 
 	"github.com/Psiphon-Labs/psiphon-tunnel-core/psiphon/common/obfuscator"
 	"github.com/Psiphon-Labs/psiphon-tunnel-core/psiphon/common/prng"
@@ -52,11 +53,11 @@ func (conn *baseConn) Write(b []byte) (n int, err error) { return conn.ch.Write(
 func (conn *baseConn) Close() error {
 	var chErr error
 	// If the peer has already closed the connection, we'll get io.EOF. We ignore this.
-	if err := conn.ch.Close(); err != nil && !errors.Is(err, io.EOF) {
-		chErr = fmt.Errorf("failed to close channel: %w", err)
+	if err := conn.ch.Close(); err != nil && !goerrors.Is(err, io.EOF) {
+		chErr = errors.New("failed to close channel: %v", err)
 	}
 	// If the peer has already closed the connection, we'll get net.ErrClosed. We ignore this.
-	if err := conn.conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+	if err := conn.conn.Close(); err != nil && !goerrors.Is(err, net.ErrClosed) {
 		return err
 	}
 	return chErr
@@ -109,7 +110,7 @@ func (conn *clientConn) Handshake() error {
 
 	prngSeed, err := prng.NewSeed()
 	if err != nil {
-		return fmt.Errorf("failed to generate PRNG seed: %w", err)
+		return errors.New("failed to generate PRNG seed: %v", err)
 	}
 
 	osshConn, err := obfuscator.NewClientObfuscatedSSHConn(
@@ -120,14 +121,14 @@ func (conn *clientConn) Handshake() error {
 		nil, nil,
 	)
 	if err != nil {
-		return fmt.Errorf("ossh handshake failed: %w", err)
+		return errors.New("ossh handshake failed: %v", err)
 	}
 	cleanupOnFailure.push(func() { osshConn.Close() })
 
 	sshCfg := ssh.ClientConfig{HostKeyCallback: ssh.FixedHostKey(conn.cfg.ServerPublicKey)}
 	sshConn, chans, reqs, err := ssh.NewClientConn(osshConn, "", &sshCfg)
 	if err != nil {
-		return fmt.Errorf("ssh handshake failed: %w", err)
+		return errors.New("ssh handshake failed: %v", err)
 	}
 	go discardChannels(chans)
 	go ssh.DiscardRequests(reqs)
@@ -135,7 +136,7 @@ func (conn *clientConn) Handshake() error {
 
 	channel, reqs, err := sshConn.OpenChannel("channel0", []byte{})
 	if err != nil {
-		return fmt.Errorf("failed to open channel: %w", err)
+		return errors.New("failed to open channel: %v", err)
 	}
 	go ssh.DiscardRequests(reqs)
 
@@ -177,7 +178,7 @@ func (conn *serverConn) Handshake() error {
 		conn.cfg.logger(),
 	)
 	if err != nil {
-		return fmt.Errorf("ossh handshake failed: %w", err)
+		return errors.New("ossh handshake failed: %v", err)
 	}
 	cleanupOnFailure.push(func() { osshConn.Close() })
 
@@ -186,14 +187,14 @@ func (conn *serverConn) Handshake() error {
 
 	sshConn, chans, reqs, err := ssh.NewServerConn(osshConn, &sshCfg)
 	if err != nil {
-		return fmt.Errorf("ssh handshake failed: %w", err)
+		return errors.New("ssh handshake failed: %v", err)
 	}
 	go ssh.DiscardRequests(reqs)
 	cleanupOnFailure.push(func() { sshConn.Close() })
 
 	channel, reqs, err := (<-chans).Accept()
 	if err != nil {
-		return fmt.Errorf("failed to accept channel: %w", err)
+		return errors.New("failed to accept channel: %v", err)
 	}
 	go discardChannels(chans)
 	go ssh.DiscardRequests(reqs)

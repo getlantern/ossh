@@ -7,9 +7,9 @@ package ossh
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"net"
+
+	"github.com/getlantern/errors"
 
 	"github.com/Psiphon-Labs/psiphon-tunnel-core/psiphon/common"
 	"golang.org/x/crypto/ssh"
@@ -106,7 +106,7 @@ func (d dialer) Dial(network, address string) (net.Conn, error) {
 func (d dialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	transport, err := d.Dialer.DialContext(ctx, network, address)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial TCP: %w", err)
+		return nil, errors.New("failed to dial TCP: %v", err)
 	}
 	conn, err := Client(transport, d.DialerConfig)
 	if err != nil {

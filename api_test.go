@@ -3,12 +3,12 @@ package ossh
 import (
 	"crypto/rand"
 	"crypto/rsa"
-	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/getlantern/errors"
 	"github.com/getlantern/nettest"
 
 	"golang.org/x/crypto/ssh"
@@ -28,11 +28,11 @@ func makePipe() (c1, c2 net.Conn, stop func(), err error) {
 
 	_hostKey, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to generate host key (using RSA): %w", err)
+		return nil, nil, nil, errors.New("failed to generate host key (using RSA): %v", err)
 	}
 	hostKey, err := ssh.NewSignerFromKey(_hostKey)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to generate signer from RSA key: %w", err)
+		return nil, nil, nil, errors.New("failed to generate signer from RSA key: %v", err)
 	}
 
 	lCfg := ListenerConfig{
@@ -49,7 +49,7 @@ func makePipe() (c1, c2 net.Conn, stop func(), err error) {
 
 	c1TCP, c2TCP, _, err := makePipeTCP()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to create TCP pipe: %w", err)
+		return nil, nil, nil, errors.New("failed to create TCP pipe: %v", err)
 	}
 	var c1Almost almostConn = &clientConn{c1TCP, dCfg, baseConn{nil, nil}}
 	var c2Almost almostConn = &serverConn{c2TCP, lCfg, baseConn{nil, nil}}
@@ -62,7 +62,7 @@ func makePipe() (c1, c2 net.Conn, stop func(), err error) {
 func makePipeTCP() (c1, c2 net.Conn, stop func(), err error) {
 	l, err := net.Listen("tcp", "")
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to start TCP listener: %w", err)
+		return nil, nil, nil, errors.New("failed to start TCP listener: %v", err)
 	}
 	defer l.Close()
 
@@ -77,7 +77,7 @@ func makePipeTCP() (c1, c2 net.Conn, stop func(), err error) {
 		conn, err := func() (net.Conn, error) {
 			conn, err := l.Accept()
 			if err != nil {
-				return nil, fmt.Errorf("accept error: %w", err)
+				return nil, errors.New("accept error: %v", err)
 			}
 			return conn, nil
 		}()
@@ -87,7 +87,7 @@ func makePipeTCP() (c1, c2 net.Conn, stop func(), err error) {
 		conn, err := func() (net.Conn, error) {
 			conn, err := net.Dial("tcp", l.Addr().String())
 			if err != nil {
-				return nil, fmt.Errorf("dial error: %w", err)
+				return nil, errors.New("dial error: %v", err)
 			}
 			return conn, nil
 		}()
@@ -98,12 +98,12 @@ func makePipeTCP() (c1, c2 net.Conn, stop func(), err error) {
 		select {
 		case res := <-clientResC:
 			if res.err != nil {
-				return nil, nil, nil, fmt.Errorf("failed to init client-side: %w", err)
+				return nil, nil, nil, errors.New("failed to init client-side: %v", err)
 			}
 			c1 = res.conn
 		case res := <-serverResC:
 			if res.err != nil {
-				return nil, nil, nil, fmt.Errorf("failed to init server-side: %w", err)
+				return nil, nil, nil, errors.New("failed to init server-side: %v", err)
 			}
 			c2 = res.conn
 		}
