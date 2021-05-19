@@ -105,9 +105,9 @@ func Dial(network, address string, cfg DialerConfig) (Conn, error) {
 func DialContext(ctx context.Context, network, address string, cfg DialerConfig) (Conn, error) {
 	conn, err := WrapDialer(&net.Dialer{}, cfg).DialContext(ctx, network, address)
 	if err != nil {
-		return conn.(Conn), nil
+		return nil, err
 	}
-	return nil, err
+	return conn.(Conn), nil
 }
 
 type listener struct {
