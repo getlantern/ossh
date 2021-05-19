@@ -7,6 +7,7 @@ package ossh
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 
@@ -17,7 +18,7 @@ import (
 /*
  Code Structure
 
- The output of this package is API used to set up network connections which communicate over
+ The output of this package is an API used to set up network connections which communicate over
  obfuscated SSH (OSSH). This is achieved using Psiphon's OSSH implementation, wrapped with Go's
  SSH implementation.
 
@@ -36,26 +37,45 @@ import (
 
 */
 
-// DialerConfig specifies configuration for dialing.
+// DialerConfig specifies configuration for dialing. All fields are required.
 type DialerConfig struct {
-	// ServerPublicKey must be set.
-	ServerPublicKey ssh.PublicKey
-
 	// ObfuscationKeyword is used during the obfuscation handshake and must be agreed upon by the
-	// client and the server. Must be set.
+	// client and the server.
 	ObfuscationKeyword string
+
+	ServerPublicKey ssh.PublicKey
+}
+
+func (cfg DialerConfig) validate() error {
+	if cfg.ObfuscationKeyword == "" {
+		return errors.New("obfuscation keyword is required")
+	}
+	if cfg.ServerPublicKey == nil {
+		return errors.New("server public key is required")
+	}
+	return nil
 }
 
 // ListenerConfig specifies configuration for listening.
 type ListenerConfig struct {
-	// HostKey is provided to SSH clients trying to connect. Must be set.
-	HostKey ssh.Signer
-
 	// ObfuscationKeyword is used during the obfuscation handshake and must be agreed upon by the
-	// client and the server. Must be set.
+	// client and the server. Required.
 	ObfuscationKeyword string
 
+	// HostKey is used to authenticate this server. Required.
+	HostKey ssh.Signer
+
 	Logger func(clientIP string, err error, fields map[string]interface{})
+}
+
+func (cfg ListenerConfig) validate() error {
+	if cfg.ObfuscationKeyword == "" {
+		return errors.New("obfuscation keyword is required")
+	}
+	if cfg.HostKey == nil {
+		return errors.New("host key is required")
+	}
+	return nil
 }
 
 func (cfg ListenerConfig) logger() func(string, error, common.LogFields) {
@@ -88,12 +108,20 @@ func (d dialer) DialContext(ctx context.Context, network, address string) (net.C
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial TCP: %w", err)
 	}
-	return Client(transport, d.DialerConfig), nil
+	conn, err := Client(transport, d.DialerConfig)
+	if err != nil {
+		transport.Close()
+		return nil, err
+	}
+	return conn, nil
 }
 
 // WrapDialer wraps a network dialer, returning an ossh dialer.
-func WrapDialer(d Dialer, cfg DialerConfig) Dialer {
-	return dialer{d, cfg}
+func WrapDialer(d Dialer, cfg DialerConfig) (Dialer, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	return dialer{d, cfg}, nil
 }
 
 // Dial connects using the provided config. The handshake will not be initiated.
@@ -103,7 +131,11 @@ func Dial(network, address string, cfg DialerConfig) (Conn, error) {
 
 // DialContext connects using the provided config and context. The handshake will not be initiated.
 func DialContext(ctx context.Context, network, address string, cfg DialerConfig) (Conn, error) {
-	conn, err := WrapDialer(&net.Dialer{}, cfg).DialContext(ctx, network, address)
+	d, err := WrapDialer(&net.Dialer{}, cfg)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := d.DialContext(ctx, network, address)
 	if err != nil {
 		return nil, err
 	}
@@ -120,21 +152,34 @@ func (l listener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Server(transport, l.ListenerConfig), nil
+	conn, err := Server(transport, l.ListenerConfig)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return conn, nil
 }
 
 // WrapListener wraps a network listener, returning an ossh listener.
-func WrapListener(l net.Listener, cfg ListenerConfig) net.Listener {
-	return listener{l, cfg}
+func WrapListener(l net.Listener, cfg ListenerConfig) (net.Listener, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	return listener{l, cfg}, nil
 }
 
 // Listen for new connections using the provided config.
 func Listen(network, address string, cfg ListenerConfig) (net.Listener, error) {
-	l, err := net.Listen(network, address)
+	_l, err := net.Listen(network, address)
 	if err != nil {
 		return nil, err
 	}
-	return WrapListener(l, cfg), nil
+	l, err := WrapListener(_l, cfg)
+	if err != nil {
+		_l.Close()
+		return nil, err
+	}
+	return l, nil
 }
 
 // Conn is a network connection between two peers communicating via OSSH. Connections returned by
@@ -164,11 +209,17 @@ type Conn interface {
 }
 
 // Client initializes a client-side connection.
-func Client(transport net.Conn, cfg DialerConfig) Conn {
-	return newFullConn(&clientConn{transport, cfg, baseConn{nil, nil}})
+func Client(transport net.Conn, cfg DialerConfig) (Conn, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	return newFullConn(&clientConn{transport, cfg, baseConn{nil, nil}}), nil
 }
 
 // Server initializes a server-side connection.
-func Server(transport net.Conn, cfg ListenerConfig) Conn {
-	return newFullConn(&serverConn{transport, cfg, baseConn{nil, nil}})
+func Server(transport net.Conn, cfg ListenerConfig) (Conn, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	return newFullConn(&serverConn{transport, cfg, baseConn{nil, nil}}), nil
 }

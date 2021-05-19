@@ -104,13 +104,6 @@ func (conn *clientConn) RemoteAddr() net.Addr { return conn.transport.RemoteAddr
 // Per the almostConn interface, we expect this to be called only once and we do not expect calls to
 // Read or Write unless this function is called and returns no error.
 func (conn *clientConn) Handshake() error {
-	if conn.cfg.ServerPublicKey == nil {
-		return errors.New("server public key must be configured")
-	}
-	if conn.cfg.ObfuscationKeyword == "" {
-		return errors.New("obfuscation keywork must be configured")
-	}
-
 	deferStack := funcStack{}
 	defer deferStack.call()
 
@@ -174,13 +167,6 @@ func (conn *serverConn) RemoteAddr() net.Addr { return conn.transport.RemoteAddr
 // Per the almostConn interface, we expect this to be called only once and we do not expect calls to
 // Read or Write unless this function is called and returns no error.
 func (conn *serverConn) Handshake() error {
-	if conn.cfg.HostKey == nil {
-		return errors.New("host key must be configured")
-	}
-	if conn.cfg.ObfuscationKeyword == "" {
-		return errors.New("obfuscation keywork must be configured")
-	}
-
 	deferStack := funcStack{}
 	defer deferStack.call()
 
