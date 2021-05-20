@@ -288,41 +288,10 @@ func (conn *fullConn) Read(b []byte) (n int, err error) {
 
 // Used to serialize writes. Launched when the connection is created (in newFullConn).
 func (conn *fullConn) doWrites() {
-	// The first element of queue is the currently executing function.
-	// The 'bell' is rung when we are ready to execute the next function.
-	queue := []func(){}
-	bell := make(chan struct{}, 1)
-
-	exec := func(f func()) {
-		f()
-		bell <- struct{}{}
-	}
-
-	// n.b. Outstanding functions in the queue are dropped and never executed when fs is closed.
 	for {
 		select {
 		case req := <-conn.writeRequests:
-			if conn.isClosed() {
-				return
-			}
-			queue = append(queue, req)
-			if len(queue) == 1 {
-				// No currently executing function.
-				go exec(req)
-			}
-
-		case <-bell:
-			if conn.isClosed() {
-				return
-			}
-			if len(queue) <= 1 {
-				// The only remaining function just finished. Deregister and wait for more.
-				queue = []func(){}
-				continue
-			}
-			go exec(queue[1])
-			queue = queue[1:]
-
+			req()
 		case <-conn.closed:
 			return
 		}
