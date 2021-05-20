@@ -99,83 +99,6 @@ func (d *deadline) close() {
 	d.mu.Unlock()
 }
 
-// Enforces exclusive and first-in, first-out operations between concurrent goroutines.
-type fifoScheduler struct {
-	reqs      chan func()
-	closed    chan struct{}
-	closeOnce *sync.Once
-}
-
-func newFIFOScheduler() fifoScheduler {
-	fs := fifoScheduler{
-		make(chan func()),
-		make(chan struct{}),
-		new(sync.Once),
-	}
-	go fs.run()
-	return fs
-}
-
-func (fs fifoScheduler) run() {
-	// The first element of queue is the currently executing function.
-	// The 'bell' is rung when we are ready to execute the next function.
-	queue := []func(){}
-	bell := make(chan struct{}, 1)
-
-	exec := func(f func()) {
-		f()
-		bell <- struct{}{}
-	}
-
-	// n.b. Outstanding functions in the queue are dropped and never executed when fs is closed.
-	for {
-		select {
-		case req := <-fs.reqs:
-			if fs.isClosed() {
-				return
-			}
-			queue = append(queue, req)
-			if len(queue) == 1 {
-				// No currently executing function.
-				go exec(req)
-			}
-
-		case <-bell:
-			if fs.isClosed() {
-				return
-			}
-			if len(queue) <= 1 {
-				// The only remaining function just finished. Deregister and wait for more.
-				queue = []func(){}
-				continue
-			}
-			go exec(queue[1])
-			queue = queue[1:]
-
-		case <-fs.closed:
-			return
-		}
-	}
-}
-
-// Schedules the input function. Functions are invoked one-at-a-time in the order they are received.
-// If fs is already closed or closed before f is called, then f will never be invoked.
-func (fs fifoScheduler) schedule(f func()) {
-	select {
-	case fs.reqs <- f:
-	case <-fs.closed:
-	}
-}
-
-// Pending functions (passed to schedule) will never be invoked after this call.
-func (fs fifoScheduler) close() {
-	fs.closeOnce.Do(func() { close(fs.closed) })
-}
-
-func (fs fifoScheduler) isClosed() bool {
-	return isClosedChan(fs.closed)
-}
-
 // fullConn adds concurrency support and deadline handling to an almostConn. See the almostConn type
 // for requirements and assumptions about the behavior of this wrapped connection.
 //
@@ -198,8 +121,8 @@ type fullConn struct {
 
 	readDeadline, writeDeadline deadline
 
-	// Ensures exclusive, FIFO access to wrapped.Write.
-	writeScheduler fifoScheduler
+	// Used to serialize writes.
+	writeRequests chan func()
 
 	// Fields in this block are protected by shakeOnce.
 	shakeOnce sync.Once
@@ -216,14 +139,16 @@ type fullConn struct {
 }
 
 func newFullConn(conn almostConn) *fullConn {
-	return &fullConn{
+	fc := &fullConn{
 		wrapped:              conn,
 		readDeadline:         newDeadline(),
 		writeDeadline:        newDeadline(),
-		writeScheduler:       newFIFOScheduler(),
+		writeRequests:        make(chan func()),
 		closed:               make(chan struct{}),
 		handshakeOrCloseSema: make(chan struct{}, 1),
 	}
+	go fc.doWrites()
+	return fc
 }
 
 // Read implements net.Conn.Read.
@@ -284,6 +209,18 @@ func (conn *fullConn) Read(b []byte) (n int, err error) {
 	}
 }
 
+// Used to serialize writes. Launched when the connection is created (in newFullConn).
+func (conn *fullConn) doWrites() {
+	for {
+		select {
+		case req := <-conn.writeRequests:
+			req()
+		case <-conn.closed:
+			return
+		}
+	}
+}
+
 // Write implements net.Conn.Write.
 //
 // Unlike Read, Write may return 0, os.ErrDeadlineExceeded, but still successfully occur later. In
@@ -302,13 +239,21 @@ func (conn *fullConn) Write(b []byte) (n int, err error) {
 	bCopy := make([]byte, len(b))
 	copy(bCopy, b)
 	writeResultC := make(chan ioResult, 1)
-	conn.writeScheduler.schedule(func() {
+	writeFunc := func() {
 		n, err := 0, conn.Handshake()
 		if err == nil {
 			n, err = conn.wrapped.Write(bCopy)
 		}
 		writeResultC <- ioResult{n, err}
-	})
+	}
+
+	select {
+	case conn.writeRequests <- writeFunc:
+	case <-conn.writeDeadline.wait():
+		return 0, os.ErrDeadlineExceeded
+	case <-conn.closed:
+		return 0, net.ErrClosed
+	}
 
 	select {
 	case res := <-writeResultC:
@@ -346,7 +291,6 @@ func (conn *fullConn) Handshake() error {
 func (conn *fullConn) Close() error {
 	conn.closeOnce.Do(func() {
 		close(conn.closed)
-		conn.writeScheduler.close()
 		conn.readDeadline.close()
 		conn.writeDeadline.close()
 		select {
