@@ -3,6 +3,8 @@ package ossh
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"fmt"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/getlantern/errors"
 	"github.com/getlantern/nettest"
+	"github.com/stretchr/testify/require"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -22,26 +25,53 @@ func TestConn(t *testing.T) {
 	testHandshake(t, makePipe)
 }
 
+// TestListenAndDial ensures the Listen and Dial functions set up viable connections. More thorough
+// testing of the connection itself is left to TestConn.
+func TestListenAndDial(t *testing.T) {
+	lCfg, dCfg, err := configPair()
+	require.NoError(t, err)
+
+	l, err := Listen("tcp", "", *lCfg)
+	require.NoError(t, err)
+	defer l.Close()
+
+	listenerErr := make(chan error, 1)
+	go func() {
+		listenerErr <- func() error {
+			conn, err := l.Accept()
+			if err != nil {
+				return fmt.Errorf("accept error: %w", err)
+			}
+			// Echo everything back to the dialer.
+			_, err = io.Copy(conn, conn)
+			if err != nil {
+				return fmt.Errorf("copy error: %w", err)
+			}
+			return nil
+		}()
+	}()
+
+	conn, err := Dial("tcp", l.Addr().String(), *dCfg)
+	require.NoError(t, err)
+
+	msg := []byte("hello OSSH")
+	_, err = conn.Write(msg)
+	require.NoError(t, err)
+
+	buf := make([]byte, len(msg)*2)
+	n, err := conn.Read(buf)
+	require.NoError(t, err)
+	require.Equal(t, string(msg), string(buf[:n]))
+
+	require.NoError(t, conn.Close())
+	require.NoError(t, <-listenerErr)
+}
+
 // makePipe implements nettest.MakePipe.
 func makePipe() (c1, c2 net.Conn, stop func(), err error) {
-	const keyword = "obfuscation-keyword"
-
-	_hostKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	lCfg, dCfg, err := configPair()
 	if err != nil {
-		return nil, nil, nil, errors.New("failed to generate host key (using RSA): %v", err)
-	}
-	hostKey, err := ssh.NewSignerFromKey(_hostKey)
-	if err != nil {
-		return nil, nil, nil, errors.New("failed to generate signer from RSA key: %v", err)
-	}
-
-	lCfg := ListenerConfig{
-		HostKey:            hostKey,
-		ObfuscationKeyword: keyword,
-	}
-	dCfg := DialerConfig{
-		ServerPublicKey:    hostKey.PublicKey(),
-		ObfuscationKeyword: keyword,
+		return nil, nil, nil, err
 	}
 
 	// It would be simpler to use net.Pipe to set up the peer transports. However, the ssh library
@@ -51,12 +81,35 @@ func makePipe() (c1, c2 net.Conn, stop func(), err error) {
 	if err != nil {
 		return nil, nil, nil, errors.New("failed to create TCP pipe: %v", err)
 	}
-	var c1Almost almostConn = &clientConn{c1TCP, dCfg, baseConn{nil, nil}}
-	var c2Almost almostConn = &serverConn{c2TCP, lCfg, baseConn{nil, nil}}
+	var c1Almost almostConn = &clientConn{c1TCP, *dCfg, baseConn{nil, nil}}
+	var c2Almost almostConn = &serverConn{c2TCP, *lCfg, baseConn{nil, nil}}
 	c1Almost, c2Almost = coordinateClose(c1Almost, c2Almost)
 	c1, c2 = newFullConn(c1Almost), newFullConn(c2Almost)
 	stop = func() { c1.Close(); c2.Close() }
 	return
+}
+
+func configPair() (*ListenerConfig, *DialerConfig, error) {
+	const keyword = "obfuscation-keyword"
+
+	_hostKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		return nil, nil, errors.New("failed to generate host key (using RSA): %v", err)
+	}
+	hostKey, err := ssh.NewSignerFromKey(_hostKey)
+	if err != nil {
+		return nil, nil, errors.New("failed to generate signer from RSA key: %v", err)
+	}
+
+	lCfg := &ListenerConfig{
+		HostKey:            hostKey,
+		ObfuscationKeyword: keyword,
+	}
+	dCfg := &DialerConfig{
+		ServerPublicKey:    hostKey.PublicKey(),
+		ObfuscationKeyword: keyword,
+	}
+	return lCfg, dCfg, nil
 }
 
 func makePipeTCP() (c1, c2 net.Conn, stop func(), err error) {
