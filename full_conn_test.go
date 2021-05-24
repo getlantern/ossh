@@ -38,11 +38,17 @@ func init() {
 		for delay := range delayC {
 			delays = append(delays, delay)
 			if len(delays)%lastN == 0 {
-				var sum time.Duration
+				var sum, max time.Duration
 				for i := len(delays) - lastN; i < len(delays)-1; i++ {
 					sum += delays[i]
 				}
+				for _, d := range delays {
+					if d > max {
+						max = d
+					}
+				}
 				fmt.Printf("average delay of last %d runs: %v\n", lastN, sum/time.Duration(lastN))
+				fmt.Printf("max delay seen: %v\n", max)
 			}
 		}
 	}()
