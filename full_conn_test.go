@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ import (
 )
 
 // The time allowed for concurrent goroutines to get started and into the actual important bits.
-// Empirically, this seems to take about 400 ns on a modern MacBook Pro.
+// Empirically, this seems to take about 400 ns on a modern MacBook Pro and 300 ns in CircleCI.
 const goroutineStartTime = 10 * time.Millisecond
 
 var (
@@ -193,9 +194,22 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 	})
 }
 
+// debugging
+var (
+	sumDelay  time.Duration
+	totalRuns int
+	delayLock sync.Mutex
+)
+
 // Makes some assumptions about the implementation fullConn.Read.
 func testBufferedRead(t *testing.T) {
 	t.Parallel()
+
+	// debugging
+	var (
+		launched, started time.Time
+		startedC          = make(chan time.Time, 1)
+	)
 
 	const bufferSize = 1024
 
@@ -209,10 +223,20 @@ func testBufferedRead(t *testing.T) {
 	//	(3) Writing data to c2.
 
 	readResult := make(chan ioResult)
+	launched = time.Now()
 	go func() {
+		startedC <- time.Now()
 		n, err := c1.Read(make([]byte, 1024))
 		readResult <- ioResult{n, err}
 	}()
+
+	started = <-startedC
+	delay := started.Sub(launched)
+	delayLock.Lock()
+	sumDelay += delay
+	totalRuns += 1
+	fmt.Printf("average delay after %d runs: %v\n", totalRuns, sumDelay/time.Duration(totalRuns))
+	delayLock.Unlock()
 
 	time.Sleep(goroutineStartTime)
 	c1.SetDeadline(inThePast)
