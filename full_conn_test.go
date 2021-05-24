@@ -39,7 +39,7 @@ func init() {
 			delays = append(delays, delay)
 			if len(delays)%lastN == 0 {
 				var sum time.Duration
-				for i := len(delays) - lastN - 1; i < len(delays)-1; i++ {
+				for i := len(delays) - lastN; i < len(delays)-1; i++ {
 					sum += delays[i]
 				}
 				fmt.Printf("average delay of last %d runs: %v\n", lastN, sum/time.Duration(lastN))
