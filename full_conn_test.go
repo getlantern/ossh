@@ -3,6 +3,7 @@ package ossh
 import (
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -17,13 +18,28 @@ import (
 )
 
 // The time allowed for concurrent goroutines to get started and into the actual important bits.
-// Empirically, this seems to take about 300 ns on a modern MacBook Pro.
+// Empirically, this seems to take about 400 ns on a modern MacBook Pro.
 const goroutineStartTime = 10 * time.Millisecond
 
 var (
 	inThePast  = time.Now().Add(-1 * time.Hour)
 	noDeadline = time.Time{}
 )
+
+func TestGoroutineStartTime(t *testing.T) {
+	const runs = 1000
+
+	var sum time.Duration
+	for i := 0; i < runs; i++ {
+		started := make(chan time.Time)
+		launched := time.Now()
+		go func() {
+			started <- time.Now()
+		}()
+		sum += (<-started).Sub(launched)
+	}
+	fmt.Println("average delay:", sum/runs)
+}
 
 func TestFullConn(t *testing.T) {
 	// Tests I/O, deadline support, net.Conn adherence, and data races.

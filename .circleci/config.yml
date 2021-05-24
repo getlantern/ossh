@@ -15,7 +15,8 @@ jobs:
           name: Test
           # We have a lot of concurrency and synchronization in this library. Test with -race and
           # -count=100 to expose any timing related bugs.
-          command: go test -race -count=100 -v
+          # command: go test -race -count=100 -v
+          command: go test -run GoroutineStartTime -v
 
 workflows:
     version: 2
