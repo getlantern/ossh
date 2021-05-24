@@ -1,7 +1,6 @@
 package ossh
 
 import (
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -26,20 +25,36 @@ var (
 	noDeadline = time.Time{}
 )
 
-// func TestGoroutineStartTime(t *testing.T) {
-// 	const runs = 1000
+// debugging
+var (
+	avgDelay time.Duration
+	delayC   = make(chan time.Duration)
+)
 
-// 	var sum time.Duration
-// 	for i := 0; i < runs; i++ {
-// 		started := make(chan time.Time)
-// 		launched := time.Now()
-// 		go func() {
-// 			started <- time.Now()
-// 		}()
-// 		sum += (<-started).Sub(launched)
-// 	}
-// 	fmt.Println("average delay:", sum/runs)
-// }
+func init() {
+	go func() {
+		var (
+			sumDelay  time.Duration
+			totalRuns int
+		)
+		for delay := range delayC {
+			sumDelay += delay
+			totalRuns += 1
+			if totalRuns%100 == 0 {
+				fmt.Printf("average delay after %d runs: %v\n", totalRuns, sumDelay/time.Duration(totalRuns))
+			}
+		}
+	}()
+}
+
+func TestGoroutineStartTime(t *testing.T) {
+	started := make(chan time.Time)
+	launched := time.Now()
+	go func() {
+		started <- time.Now()
+	}()
+	delayC <- (<-started).Sub(launched)
+}
 
 func TestFullConn(t *testing.T) {
 	// Tests I/O, deadline support, net.Conn adherence, and data races.
@@ -49,7 +64,7 @@ func TestFullConn(t *testing.T) {
 	testHandshake(t, makeFullConnPipe)
 
 	// Tests the case in which part of a read ends up buffered on the connection.
-	t.Run("BufferedRead", testBufferedRead)
+	// t.Run("BufferedRead", testBufferedRead)
 }
 
 type handshaker interface {
@@ -193,107 +208,82 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 	})
 }
 
-// debugging
-var (
-	avgDelay time.Duration
-	delayC   = make(chan time.Duration)
-)
-
-func init() {
-	go func() {
-		var (
-			sumDelay  time.Duration
-			totalRuns int
-		)
-		for delay := range delayC {
-			sumDelay += delay
-			totalRuns += 1
-			if totalRuns%10 == 0 {
-				fmt.Println(totalRuns, "runs")
-			}
-			if totalRuns%100 == 0 {
-				fmt.Printf("average delay after %d runs: %v\n", totalRuns, sumDelay/time.Duration(totalRuns))
-			}
-		}
-	}()
-}
-
 // Makes some assumptions about the implementation fullConn.Read.
-func testBufferedRead(t *testing.T) {
-	t.Parallel()
+// func testBufferedRead(t *testing.T) {
+// 	t.Parallel()
 
-	// debugging
-	var (
-		launched, started time.Time
-		startedC          = make(chan time.Time, 1)
-	)
+// 	// debugging
+// 	var (
+// 		launched, started time.Time
+// 		startedC          = make(chan time.Time, 1)
+// 	)
 
-	const bufferSize = 1024
+// 	const bufferSize = 1024
 
-	c1, c2, stop, err := makeFullConnPipe()
-	require.NoError(t, err)
-	defer stop()
+// 	c1, c2, stop, err := makeFullConnPipe()
+// 	require.NoError(t, err)
+// 	defer stop()
 
-	// We force buffered data by:
-	// 	(1) Starting a Read on c1.
-	//	(2) Cancelling the Read.
-	//	(3) Writing data to c2.
+// 	// We force buffered data by:
+// 	// 	(1) Starting a Read on c1.
+// 	//	(2) Cancelling the Read.
+// 	//	(3) Writing data to c2.
 
-	readResult := make(chan ioResult)
-	launched = time.Now()
-	go func() {
-		startedC <- time.Now()
-		n, err := c1.Read(make([]byte, 1024))
-		readResult <- ioResult{n, err}
-	}()
+// 	readResult := make(chan ioResult)
+// 	launched = time.Now()
+// 	go func() {
+// 		startedC <- time.Now()
+// 		n, err := c1.Read(make([]byte, 1024))
+// 		readResult <- ioResult{n, err}
+// 	}()
 
-	started = <-startedC
-	delayC <- started.Sub(launched)
+// 	started = <-startedC
+// 	delayC <- started.Sub(launched)
 
-	time.Sleep(goroutineStartTime)
-	c1.SetDeadline(inThePast)
+// 	time.Sleep(goroutineStartTime)
+// 	c1.SetDeadline(inThePast)
 
-	res := <-readResult
-	require.ErrorIs(t, res.err, os.ErrDeadlineExceeded)
-	require.Zero(t, res.n)
+// 	res := <-readResult
+// 	require.ErrorIs(t, res.err, os.ErrDeadlineExceeded)
+// 	require.Zero(t, res.n)
 
-	data := make([]byte, bufferSize)
-	_, err = rand.Read(data)
-	require.NoError(t, err)
+// 	data := make([]byte, bufferSize)
+// 	_, err = rand.Read(data)
+// 	require.NoError(t, err)
 
-	_, err = c2.Write(data)
-	require.NoError(t, err)
+// 	_, err = c2.Write(data)
+// 	require.NoError(t, err)
 
-	// Now we try to read the buffered data.
+// 	// Now we try to read the buffered data.
 
-	readBuf := make([]byte, bufferSize*2)
-	c1.SetDeadline(noDeadline)
+// 	readBuf := make([]byte, bufferSize*2)
+// 	c1.SetDeadline(noDeadline)
 
-	// Try reading less than what is currently buffered.
-	n, err := c1.Read(readBuf[:bufferSize/2])
-	require.NoError(t, err)
-	require.Equal(t, bufferSize/2, n)
+// 	// Try reading less than what is currently buffered.
+// 	n, err := c1.Read(readBuf[:bufferSize/2])
+// 	require.NoError(t, err)
+// 	require.Equal(t, bufferSize/2, n)
 
-	// Try reading more than what is currently buffered.
-	n2, err := c1.Read(readBuf[bufferSize/2:])
-	require.NoError(t, err)
-	require.Equal(t, bufferSize-bufferSize/2, n2)
-	n += n2
+// 	// Try reading more than what is currently buffered.
+// 	n2, err := c1.Read(readBuf[bufferSize/2:])
+// 	require.NoError(t, err)
+// 	require.Equal(t, bufferSize-bufferSize/2, n2)
+// 	n += n2
 
-	require.Equal(t, data, readBuf[:n])
+// 	require.Equal(t, data, readBuf[:n])
 
-	// Ensure we can still receive new data.
-	go io.Copy(c2, c2) // echo everything written to c1
+// 	// Ensure we can still receive new data.
+// 	go io.Copy(c2, c2) // echo everything written to c1
 
-	msg := []byte("hello")
-	_, err = c1.Write(msg)
-	require.NoError(t, err)
+// 	msg := []byte("hello")
+// 	_, err = c1.Write(msg)
+// 	require.NoError(t, err)
 
-	buf := make([]byte, len(msg)*2)
-	n, err = c1.Read(buf)
-	require.NoError(t, err)
-	require.Equal(t, string(msg), string(buf[:n]))
-}
+// 	buf := make([]byte, len(msg)*2)
+// 	n, err = c1.Read(buf)
+// 	require.NoError(t, err)
+// 	require.Equal(t, string(msg), string(buf[:n]))
+// }
 
 // makeFullConnPipe implements nettest.MakePipe.
 func makeFullConnPipe() (c1, c2 net.Conn, stop func(), err error) {
