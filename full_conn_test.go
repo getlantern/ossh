@@ -17,7 +17,7 @@ import (
 )
 
 // The time allowed for concurrent goroutines to get started and into the actual important bits.
-// Empirically, this seems to take about 400 ns on a modern MacBook Pro and 300 ns in CircleCI.
+// Empirically, this seems to take about 400 ns on a modern MacBook Pro and 65 µs in CircleCI.
 const goroutineStartTime = 10 * time.Millisecond
 
 var (
@@ -33,15 +33,16 @@ var (
 
 func init() {
 	go func() {
-		var (
-			sumDelay  time.Duration
-			totalRuns int
-		)
+		lastN := 5
+		delays := []time.Duration{}
 		for delay := range delayC {
-			sumDelay += delay
-			totalRuns += 1
-			if totalRuns%100 == 0 {
-				fmt.Printf("average delay after %d runs: %v\n", totalRuns, sumDelay/time.Duration(totalRuns))
+			delays = append(delays, delay)
+			if len(delays)%lastN == 0 {
+				var sum time.Duration
+				for i := len(delays) - lastN - 1; i < len(delays)-1; i++ {
+					sum += delays[i]
+				}
+				fmt.Printf("average delay of last %d runs: %v\n", lastN, sum/time.Duration(lastN))
 			}
 		}
 	}()
