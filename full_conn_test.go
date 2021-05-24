@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,20 +26,20 @@ var (
 	noDeadline = time.Time{}
 )
 
-func TestGoroutineStartTime(t *testing.T) {
-	const runs = 1000
+// func TestGoroutineStartTime(t *testing.T) {
+// 	const runs = 1000
 
-	var sum time.Duration
-	for i := 0; i < runs; i++ {
-		started := make(chan time.Time)
-		launched := time.Now()
-		go func() {
-			started <- time.Now()
-		}()
-		sum += (<-started).Sub(launched)
-	}
-	fmt.Println("average delay:", sum/runs)
-}
+// 	var sum time.Duration
+// 	for i := 0; i < runs; i++ {
+// 		started := make(chan time.Time)
+// 		launched := time.Now()
+// 		go func() {
+// 			started <- time.Now()
+// 		}()
+// 		sum += (<-started).Sub(launched)
+// 	}
+// 	fmt.Println("average delay:", sum/runs)
+// }
 
 func TestFullConn(t *testing.T) {
 	// Tests I/O, deadline support, net.Conn adherence, and data races.
@@ -196,10 +195,28 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 
 // debugging
 var (
-	sumDelay  time.Duration
-	totalRuns int
-	delayLock sync.Mutex
+	avgDelay time.Duration
+	delayC   = make(chan time.Duration)
 )
+
+func init() {
+	go func() {
+		var (
+			sumDelay  time.Duration
+			totalRuns int
+		)
+		for delay := range delayC {
+			sumDelay += delay
+			totalRuns += 1
+			if totalRuns%10 == 0 {
+				fmt.Println(totalRuns, "runs")
+			}
+			if totalRuns%100 == 0 {
+				fmt.Printf("average delay after %d runs: %v\n", totalRuns, sumDelay/time.Duration(totalRuns))
+			}
+		}
+	}()
+}
 
 // Makes some assumptions about the implementation fullConn.Read.
 func testBufferedRead(t *testing.T) {
@@ -231,12 +248,7 @@ func testBufferedRead(t *testing.T) {
 	}()
 
 	started = <-startedC
-	delay := started.Sub(launched)
-	delayLock.Lock()
-	sumDelay += delay
-	totalRuns += 1
-	fmt.Printf("average delay after %d runs: %v\n", totalRuns, sumDelay/time.Duration(totalRuns))
-	delayLock.Unlock()
+	delayC <- started.Sub(launched)
 
 	time.Sleep(goroutineStartTime)
 	c1.SetDeadline(inThePast)
