@@ -1,6 +1,7 @@
 package ossh
 
 import (
+	"crypto/rand"
 	"errors"
 	"io"
 	"net"
@@ -15,12 +16,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// The time allowed for concurrent goroutines to get started and into the actual important bits.
+// Empirically, this seems to take about 300 ns on a modern MacBook Pro.
+const goroutineStartTime = 10 * time.Millisecond
+
+var (
+	inThePast  = time.Now().Add(-1 * time.Hour)
+	noDeadline = time.Time{}
+)
+
 func TestFullConn(t *testing.T) {
 	// Tests I/O, deadline support, net.Conn adherence, and data races.
 	nettest.TestConn(t, makeFullConnPipe)
 
 	// Tests calls made before and during the handshake.
 	testHandshake(t, makeFullConnPipe)
+
+	// Tests the case in which part of a read ends up buffered on the connection.
+	t.Run("BufferedRead", testBufferedRead)
 }
 
 type handshaker interface {
@@ -29,15 +42,6 @@ type handshaker interface {
 
 // Assumes the net.Conn instances returned by mp implement the handshaker interface.
 func testHandshake(t *testing.T, mp nettest.MakePipe) {
-	// The time allowed for concurrent goroutines to get started and into the actual important bits.
-	// Empirically, this seems to take about 300 ns on a modern MacBook Pro.
-	const handshakeStartTime = 10 * time.Millisecond
-
-	var (
-		inThePast  = time.Now().Add(-1 * time.Hour)
-		noDeadline = time.Time{}
-	)
-
 	t.Run("CloseThenHandshake", func(t *testing.T) {
 		t.Parallel()
 
@@ -70,7 +74,7 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 
 		errC := make(chan error)
 		go func() { errC <- c1.(handshaker).Handshake() }()
-		time.Sleep(handshakeStartTime)
+		time.Sleep(goroutineStartTime)
 		require.NoError(t, c1.Close())
 		require.ErrorIs(t, <-errC, net.ErrClosed)
 
@@ -106,7 +110,7 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		require.NoError(t, err)
 		defer stop()
 
-		c1.SetDeadline(time.Now().Add(handshakeStartTime))
+		c1.SetDeadline(time.Now().Add(goroutineStartTime))
 
 		// Initiate the handshake with a Read. Handshake does not itself support deadlines.
 		errC := make(chan error)
@@ -143,7 +147,7 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 
 		errC := make(chan error)
 		go func() { errC <- c1.(handshaker).Handshake() }()
-		time.Sleep(handshakeStartTime)
+		time.Sleep(goroutineStartTime)
 
 		require.NotNil(t, c1.LocalAddr())
 		require.NotNil(t, c1.RemoteAddr())
@@ -162,7 +166,7 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 
 		errC := make(chan error)
 		go func() { errC <- c1.(handshaker).Handshake() }()
-		time.Sleep(handshakeStartTime)
+		time.Sleep(goroutineStartTime)
 		require.NoError(t, c2.(handshaker).Handshake())
 		require.NoError(t, <-errC)
 
@@ -171,6 +175,72 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 		require.NotNil(t, c2.LocalAddr())
 		require.NotNil(t, c2.RemoteAddr())
 	})
+}
+
+// Makes some assumptions about the implementation fullConn.Read.
+func testBufferedRead(t *testing.T) {
+	t.Parallel()
+
+	const bufferSize = 1024
+
+	c1, c2, stop, err := makeFullConnPipe()
+	require.NoError(t, err)
+	defer stop()
+
+	// We force buffered data by:
+	// 	(1) Starting a Read on c1.
+	//	(2) Cancelling the Read.
+	//	(3) Writing data to c2.
+
+	readResult := make(chan ioResult)
+	go func() {
+		n, err := c1.Read(make([]byte, 1024))
+		readResult <- ioResult{n, err}
+	}()
+
+	time.Sleep(goroutineStartTime)
+	c1.SetDeadline(inThePast)
+
+	res := <-readResult
+	require.ErrorIs(t, res.err, os.ErrDeadlineExceeded)
+	require.Zero(t, res.n)
+
+	data := make([]byte, bufferSize)
+	_, err = rand.Read(data)
+	require.NoError(t, err)
+
+	_, err = c2.Write(data)
+	require.NoError(t, err)
+
+	// Now we try to read the buffered data.
+
+	readBuf := make([]byte, bufferSize*2)
+	c1.SetDeadline(noDeadline)
+
+	// Try reading less than what is currently buffered.
+	n, err := c1.Read(readBuf[:bufferSize/2])
+	require.NoError(t, err)
+	require.Equal(t, bufferSize/2, n)
+
+	// Try reading more than what is currently buffered.
+	n2, err := c1.Read(readBuf[bufferSize/2:])
+	require.NoError(t, err)
+	require.Equal(t, bufferSize-bufferSize/2, n2)
+	n += n2
+
+	require.Equal(t, data, readBuf[:n])
+
+	// Ensure we can still receive new data.
+	go io.Copy(c2, c2) // echo everything written to c1
+
+	msg := []byte("hello")
+	_, err = c1.Write(msg)
+	require.NoError(t, err)
+
+	buf := make([]byte, len(msg)*2)
+	n, err = c1.Read(buf)
+	require.NoError(t, err)
+	require.Equal(t, string(msg), string(buf[:n]))
 }
 
 // makeFullConnPipe implements nettest.MakePipe.
