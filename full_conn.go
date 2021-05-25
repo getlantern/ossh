@@ -138,7 +138,7 @@ type fullConn struct {
 	handshakeOrCloseSema chan struct{}
 
 	// debugging
-	callingWrappedRead chan time.Time
+	// callingWrappedRead chan time.Time
 }
 
 func newFullConn(conn almostConn) *fullConn {
@@ -150,7 +150,7 @@ func newFullConn(conn almostConn) *fullConn {
 		closed:               make(chan struct{}),
 		handshakeOrCloseSema: make(chan struct{}, 1),
 
-		callingWrappedRead: make(chan time.Time),
+		// callingWrappedRead: make(chan time.Time),
 	}
 	go fc.doWrites()
 	return fc
@@ -187,10 +187,10 @@ func (conn *fullConn) Read(b []byte) (n int, err error) {
 		}
 		go func() {
 			// debugging
-			select {
-			case conn.callingWrappedRead <- time.Now():
-			default:
-			}
+			// select {
+			// case conn.callingWrappedRead <- time.Now():
+			// default:
+			// }
 
 			n, err := 0, conn.Handshake()
 			if err == nil {
