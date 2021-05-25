@@ -136,9 +136,6 @@ type fullConn struct {
 	// We cannot call Handshake and Close concurrently on the wrapped connection. This binary
 	// semaphore is used to synchronize calls to both methods.
 	handshakeOrCloseSema chan struct{}
-
-	// debugging
-	// callingWrappedRead chan time.Time
 }
 
 func newFullConn(conn almostConn) *fullConn {
@@ -149,8 +146,6 @@ func newFullConn(conn almostConn) *fullConn {
 		writeRequests:        make(chan func()),
 		closed:               make(chan struct{}),
 		handshakeOrCloseSema: make(chan struct{}, 1),
-
-		// callingWrappedRead: make(chan time.Time),
 	}
 	go fc.doWrites()
 	return fc
@@ -186,12 +181,6 @@ func (conn *fullConn) Read(b []byte) (n int, err error) {
 			conn.buf = make([]byte, len(b))
 		}
 		go func() {
-			// debugging
-			// select {
-			// case conn.callingWrappedRead <- time.Now():
-			// default:
-			// }
-
 			n, err := 0, conn.Handshake()
 			if err == nil {
 				n, err = conn.wrapped.Read(conn.buf[:len(b)])

@@ -25,44 +25,6 @@ var (
 	noDeadline = time.Time{}
 )
 
-// debugging
-var (
-	avgDelay time.Duration
-	delayC   = make(chan time.Duration)
-)
-
-// func init() {
-// 	go func() {
-// 		lastN := 5
-// 		delays := []time.Duration{}
-// 		for delay := range delayC {
-// 			delays = append(delays, delay)
-// 			if len(delays)%lastN == 0 {
-// 				var sum, max time.Duration
-// 				for i := len(delays) - lastN; i < len(delays)-1; i++ {
-// 					sum += delays[i]
-// 				}
-// 				for _, d := range delays {
-// 					if d > max {
-// 						max = d
-// 					}
-// 				}
-// 				fmt.Printf("average delay of last %d runs: %v\n", lastN, sum/time.Duration(lastN))
-// 				fmt.Printf("max delay seen: %v\n", max)
-// 			}
-// 		}
-// 	}()
-// }
-
-// func TestGoroutineStartTime(t *testing.T) {
-// 	started := make(chan time.Time)
-// 	launched := time.Now()
-// 	go func() {
-// 		started <- time.Now()
-// 	}()
-// 	delayC <- (<-started).Sub(launched)
-// }
-
 func TestFullConn(t *testing.T) {
 	// Tests I/O, deadline support, net.Conn adherence, and data races.
 	nettest.TestConn(t, makeFullConnPipe)
@@ -219,19 +181,11 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 func testBufferedRead(t *testing.T) {
 	t.Parallel()
 
-	// debugging
-	var (
-	// launched, started time.Time
-	// startedC          = make(chan time.Time, 1)
-	)
-
 	const bufferSize = 1024
 
 	c1, c2, stop, err := makeFullConnPipe()
 	require.NoError(t, err)
 	defer stop()
-
-	// c1Started := c1.(*fullConn).callingWrappedRead
 
 	// We force buffered data by:
 	// 	(1) Starting a Read on c1.
@@ -239,15 +193,10 @@ func testBufferedRead(t *testing.T) {
 	//	(3) Writing data to c2.
 
 	readResult := make(chan ioResult)
-	// launched = time.Now()
 	go func() {
-		// startedC <- time.Now()
 		n, err := c1.Read(make([]byte, 1024))
 		readResult <- ioResult{n, err}
 	}()
-
-	// started = <-c1Started
-	// delayC <- started.Sub(launched)
 
 	time.Sleep(goroutineStartTime)
 	c1.SetDeadline(inThePast)
