@@ -17,8 +17,8 @@ import (
 )
 
 // The time allowed for concurrent goroutines to get started and into the actual important bits.
-// Empirically, this seems to take about 300 ns on a modern MacBook Pro.
-const goroutineStartTime = 10 * time.Millisecond
+// The max delay we usually see is about 300 µs on a modern Macbook Pro and 15 ms in CircleCI.
+const goroutineStartTime = 50 * time.Millisecond
 
 var (
 	inThePast  = time.Now().Add(-1 * time.Hour)
