@@ -43,6 +43,7 @@ func TestListenAndDial(t *testing.T) {
 			if err != nil {
 				return fmt.Errorf("accept error: %w", err)
 			}
+			defer conn.Close()
 			// Echo everything back to the dialer.
 			_, err = io.Copy(conn, conn)
 			if err != nil {
