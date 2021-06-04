@@ -18,7 +18,7 @@ import (
 
 // The time allowed for concurrent goroutines to get started and into the actual important bits.
 // The max delay we usually see is about 300 µs on a modern Macbook Pro and 15 ms in CircleCI.
-const goroutineStartTime = 50 * time.Millisecond
+const goroutineStartTime = 100 * time.Millisecond
 
 var (
 	inThePast  = time.Now().Add(-1 * time.Hour)
@@ -177,7 +177,7 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 	})
 }
 
-// Makes some assumptions about the implementation fullConn.Read.
+// Makes some assumptions about the implementation of fullConn.Read.
 func testBufferedRead(t *testing.T) {
 	t.Parallel()
 
@@ -198,7 +198,10 @@ func testBufferedRead(t *testing.T) {
 		readResult <- ioResult{n, err}
 	}()
 
-	time.Sleep(goroutineStartTime)
+	// When c2 returns from the handshake, we know that c1's read routine has started.
+	require.NoError(t, c2.(handshaker).Handshake())
+
+	// Cancel c1's read, then write from c2. c1's read routine should buffer the data.
 	c1.SetDeadline(inThePast)
 
 	res := <-readResult

@@ -262,11 +262,13 @@ func (cc coordinatedCloser) watchPeerReads() {
 // ready to close as well. However, sometimes we want to close and the peer is inactive. The peer
 // has no more data to read, but is not going to close until some deferred call is invoked. In this
 // case, we need the Close function to unblock and return anyway.
-const closeWaitTimeout = 100 * time.Millisecond
+//
+// This wait time may seem a little high, but we see long pauses in CI necessitating this.
+const closeWaitTime = 10 * time.Second
 
 func (cc coordinatedCloser) Close() error {
 	cc.closeOnce.Do(func() {
-		timer := time.NewTimer(closeWaitTimeout)
+		timer := time.NewTimer(closeWaitTime)
 		close(cc.closing)
 		select {
 		case <-cc.readyToClose:
