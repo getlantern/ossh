@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/getlantern/errors"
 	"github.com/getlantern/nettest"
@@ -257,10 +258,21 @@ func (cc coordinatedCloser) watchPeerReads() {
 	}
 }
 
+// When closing, we wait until (a) the peer has read everything we've written or (b) the peer is
+// ready to close as well. However, sometimes we want to close and the peer is inactive. The peer
+// has no more data to read, but is not going to close until some deferred call is invoked. In this
+// case, we need the Close function to unblock and return anyway.
+const closeWaitTimeout = 100 * time.Millisecond
+
 func (cc coordinatedCloser) Close() error {
 	cc.closeOnce.Do(func() {
+		timer := time.NewTimer(closeWaitTimeout)
 		close(cc.closing)
-		<-cc.readyToClose
+		select {
+		case <-cc.readyToClose:
+			timer.Stop()
+		case <-timer.C:
+		}
 		cc.closeErr = cc.almostConn.Close()
 	})
 	return cc.closeErr
