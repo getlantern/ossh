@@ -10,7 +10,7 @@ jobs:
             "64:e6:c4:ce:cf:20:58:89:24:6e:08:aa:be:e0:d6:ff"
       - run:
           name: Install Libraries
-          command: apt-get install lsof # Used by getlantern/fdcount in the tests.
+          command: sudo apt-get install lsof # Used by getlantern/fdcount in the tests.
       - run:
           name: Download Dependencies
           command: go get -d -t -v ./...
