@@ -198,7 +198,10 @@ func testBufferedRead(t *testing.T) {
 		readResult <- ioResult{n, err}
 	}()
 
-	time.Sleep(goroutineStartTime)
+	// When c2 returns from the handshake, we know that c1's read routine has started.
+	require.NoError(t, c2.(handshaker).Handshake())
+
+	// Cancel c1's read, then write from c2. c1's read routine should buffer the data.
 	c1.SetDeadline(inThePast)
 
 	res := <-readResult
