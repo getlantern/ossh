@@ -21,7 +21,7 @@ jobs:
           command: go test -race -count=100 -v
       - run:
           name: Test Leaks
-          command: go test -tags leaktests -run '.*Leaks' -v -args -leak-runs 100
+          command: go test -tags leaktests -run '.*Leaks' -v -args -leak-runs 10
 
 workflows:
     version: 2
