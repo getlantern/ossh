@@ -262,7 +262,7 @@ func (cc coordinatedCloser) watchPeerReads() {
 // ready to close as well. However, sometimes we want to close and the peer is inactive. The peer
 // has no more data to read, but is not going to close until some deferred call is invoked. In this
 // case, we need the Close function to unblock and return anyway.
-const closeWaitTime = 10 * time.Second
+const closeWaitTime = time.Second
 
 func (cc coordinatedCloser) Close() error {
 	cc.closeOnce.Do(func() {
