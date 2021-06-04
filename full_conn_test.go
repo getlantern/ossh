@@ -18,7 +18,7 @@ import (
 
 // The time allowed for concurrent goroutines to get started and into the actual important bits.
 // The max delay we usually see is about 300 µs on a modern Macbook Pro and 15 ms in CircleCI.
-const goroutineStartTime = 50 * time.Millisecond
+const goroutineStartTime = 100 * time.Millisecond
 
 var (
 	inThePast  = time.Now().Add(-1 * time.Hour)
@@ -177,7 +177,7 @@ func testHandshake(t *testing.T, mp nettest.MakePipe) {
 	})
 }
 
-// Makes some assumptions about the implementation fullConn.Read.
+// Makes some assumptions about the implementation of fullConn.Read.
 func testBufferedRead(t *testing.T) {
 	t.Parallel()
 
