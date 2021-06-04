@@ -9,6 +9,9 @@ jobs:
           fingerprints:
             "64:e6:c4:ce:cf:20:58:89:24:6e:08:aa:be:e0:d6:ff"
       - run:
+          name: Install Libraries
+          command: sudo apt-get install lsof # Used by getlantern/fdcount in the tests.
+      - run:
           name: Download Dependencies
           command: go get -d -t -v ./...
       - run:
@@ -18,7 +21,7 @@ jobs:
           command: go test -race -count=100 -v
       - run:
           name: Test Leaks
-          command: go test -tags leak_tests -run *Leaks -args -leak-runs 100 -v
+          command: go test -tags leaktests -run '.*Leaks' -v -args -leak-runs 10
 
 workflows:
     version: 2
