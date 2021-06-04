@@ -1,4 +1,4 @@
-// +build leak_tests
+// +build leaktests
 
 // n.b. This file has its own build tag to exclude it from normal testing. It is run in CI.
 
