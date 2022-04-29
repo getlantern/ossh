@@ -21,7 +21,7 @@ jobs:
     # -count=100 to expose any timing-related bugs.
     - name: Run unit tests
       run: |
-        go test -race -count=100 -v -failfast -tags="headless" -coverprofile=profile.cov ./...
+        go test -race -count=10 -v -failfast -tags="headless" -coverprofile=profile.cov ./...
     - name: Test leaks
       run: go test -tags leaktests -run '.*Leaks' -v -args -leak-runs 10
     - name: Install goveralls
